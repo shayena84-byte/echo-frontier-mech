@@ -115,8 +115,9 @@ const FrontierView = (() => {
       for (const entity of [...match.nodes, ...match.entities()]) {
         const point = this.project(entity.x, entity.y);
         const isNode = !entity.type;
-        const z = entity.type === "base" ? 29 : isNode ? 18 : 9;
-        const radius = entity.type === "base" ? Math.max(19, 39 * s) : Math.max(13, (isNode ? 26 : 20) * s);
+        const model = entity.type === "mech" ? MechArt.profile(entity.chassisId) : null;
+        const z = model ? model.hud * .45 : entity.type === "base" ? 29 : isNode ? 18 : 9;
+        const radius = entity.type === "base" ? Math.max(19, 39 * s) : Math.max(13, (model ? model.shadow[0] + 3 : 26) * s);
         const dist = Math.hypot(screen.x - point.x, screen.y - (point.y - z * s));
         if (dist < radius && dist < best) { chosen = entity; best = dist; }
       }
@@ -233,6 +234,7 @@ const FrontierView = (() => {
       this.drawBackground(ctx);
       this.sortedTerrain = match.terrain.slice().sort((a, b) => a.x + a.y - b.x - b.y);
       for (const tile of this.sortedTerrain) this.drawGround(ctx, tile);
+      this.scenery = this.sortedTerrain.filter((tile) => tile.kind !== "dust" && tile.kind !== "basalt");
       this.terrain = match.terrain;
       this.dirty = false;
     }
@@ -335,37 +337,19 @@ const FrontierView = (() => {
       const p = this.project(mech.x, mech.y);
       const s = this.scale;
       const tint = POLARITY(mech.faction);
-      const bulk = [0.85, 1, 1.24][mech.chassisId];
-      const out = Math.sin(mech.foot) * (mech.moving ? 2.2 : .6);
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.scale(s * bulk, s * bulk);
-      ellipse(ctx, 0, 2, 15, 7, "#080d19b2");
-      if (chosen || this.hover === mech.id) ellipse(ctx, 0, 1, 18, 9, tint + "13", tint, 1.6);
-      const armor = mech.faction === FACTION.ally ? "#61abb0" : "#bd685f";
-      const edges = mech.faction === FACTION.ally ? "#233f58" : "#544059";
-      if (mech.chassisId === 2) {
-        box(ctx, -8, 3, 7, 5, 5, "#4f6571", "#1b2a38", "#293c47");
-        box(ctx, 8, 3, 7, 5, 5, "#536d77", "#1b2a38", "#293c47");
-      } else {
-        for (const sign of [-1, 1]) {
-          const phase = out * sign;
-          line(ctx, [[sign * 5, -8], [sign * 12, -3 + phase], [sign * 14, 4 + phase]], "#132336", 4.5);
-          line(ctx, [[sign * 4, -10], [sign * 11, -4 + phase], [sign * 13, 1 + phase]], armor, 2.2);
-        }
+      const profile = MechArt.profile(mech.chassisId);
+      const [width, depth] = profile.shadow.map((size) => size * s);
+      ellipse(ctx, p.x + 2 * s, p.y + 2 * s, width, depth, "#080d1980");
+      if (chosen || this.hover === mech.id) {
+        ellipse(ctx, p.x, p.y + s, width + 2, depth + 2, tint + "16", tint + (chosen ? "e3" : "a0"), 1.35);
       }
-      box(ctx, 0, -4, 11, 5, 8, armor, edges, "#395966");
-      area(ctx, [[-6, -14], [0, -20], [7, -14], [3, -9], [-4, -9]], mech.hitAge < .11 ? "#fff7e1" : tint, "#192c3a");
-      ellipse(ctx, 0, -14, 2.2, 1.5, "#f1ffff", null);
-      const facingX = Math.cos(mech.direction);
-      const facingY = Math.sin(mech.direction);
-      const angle = Math.atan2((facingX + facingY) * TH, (facingX - facingY) * TW);
-      const barrel = [13, 18, 11][mech.weaponId];
-      const muzzle = [Math.cos(angle) * barrel, -14 + Math.sin(angle) * barrel * .54];
-      line(ctx, [[0, -14], muzzle], "#182b3b", 4.4);
-      line(ctx, [[0, -15], muzzle], tint, 1.9);
-      ctx.restore();
-      if (chosen || mech.hp < mech.hull) this.bar(ctx, p.x, p.y - 25 * s * bulk, Math.max(13, 28 * s), mech.hp / mech.hull, tint);
+      MechArt.draw(ctx, mech, p.x, p.y, s, this.reduced);
+      if (mech.hitAge < .11 && !this.reduced) {
+        luminescence(ctx, p.x, p.y - profile.hud * s * .52, Math.max(4, 11 * s), "#ffcf9e99", "#ffb17a00");
+      }
+      if (chosen || mech.hp < mech.hull) {
+        this.bar(ctx, p.x, p.y - profile.hud * s, Math.max(13, width * 1.53), mech.hp / mech.hull, tint);
+      }
     }
 
     drawPaths(ctx, match, selected) {
@@ -392,10 +376,13 @@ const FrontierView = (() => {
         ctx.globalAlpha = Math.min(1, fade * 1.4);
         if (effect.type === "shot") {
           const to = this.project(effect.tx, effect.ty);
-          const start = [p.x, p.y - effect.high * s];
-          const end = [to.x, to.y - effect.targetHigh * s];
+          const [offsetX, offsetY] = effect.mech ? MechArt.muzzle(effect.mech, this.reduced) : [0, -effect.high];
+          const targetHeight = effect.targetChassis === undefined ? effect.targetHigh : MechArt.profile(effect.targetChassis).hud * .43;
+          const start = [p.x + offsetX * s, p.y + offsetY * s];
+          const end = [to.x, to.y - targetHeight * s];
           line(ctx, [start, end], effect.color + "70", 4.3 * s);
           line(ctx, [start, end], effect.color, Math.max(.7, 1.55 * s));
+          luminescence(ctx, start[0], start[1], Math.max(3, 8 * s), effect.color + "a0", effect.color + "00");
           luminescence(ctx, end[0], end[1], Math.max(4, 13 * s), effect.color + "e8", effect.color + "00");
         } else {
           const wave = (8 + (1 - fade) * (effect.type === "burst" ? 33 : 54)) * s;
@@ -422,7 +409,7 @@ const FrontierView = (() => {
       ctx.drawImage(this.buffer, 0, 0, this.width, this.height);
       this.drawPaths(ctx, match, selected);
       for (const pad of match.pads) this.drawPad(ctx, pad);
-      const figures = [...this.sortedTerrain.filter((tile) => tile.kind !== "dust" && tile.kind !== "basalt"),
+      const figures = [...this.scenery,
         ...match.nodes, ...match.bases, ...match.units, ...match.pads.map((pad) => pad.turret).filter((t) => t && t.hp > 0)]
         .sort((a, b) => a.x + a.y - b.x - b.y);
       for (const thing of figures) {

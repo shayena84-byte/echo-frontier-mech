@@ -10,6 +10,8 @@
   const canvas = $("terrain");
   const view = new FrontierView(canvas);
   const manual = $("manual");
+  const speedButtons = [...document.querySelectorAll(".speed-options button")];
+  const speeds = [0.5, 1, 2];
   const buildIds = ["chassis", "weapon", "kit"];
   const parts = [CHASSIS, WEAPONS, KIT];
   const format = new Intl.NumberFormat("ru", { maximumFractionDigits: 1 });
@@ -23,6 +25,8 @@
   let currentSound = null;
   let audioEnabled = false;
   let stepBank = 0;
+  let speed = speeds[1];
+  let lastPreview = "";
 
   const timeText = (seconds) => {
     const rounded = Math.max(0, Math.ceil(seconds));
@@ -257,6 +261,11 @@
     $("zoom-in").disabled = view.zoom >= 2.05;
 
     const design = currentBuild();
+    const preview = design.join("/");
+    if (preview !== lastPreview) {
+      MechArt.preview($("mech-preview"), ...design);
+      lastPreview = preview;
+    }
     const cost = buildCost(design);
     for (const [i, id] of buildIds.entries()) {
       setText(id + "-detail", parts[i][design[i]].detail);
@@ -283,6 +292,12 @@
   $("restart").addEventListener("click", () => start(true));
   $("pause").addEventListener("click", togglePause);
   $("resume").addEventListener("click", togglePause);
+  for (const button of speedButtons) {
+    button.addEventListener("click", () => {
+      speed = speeds[Number(button.dataset.speed) - 1];
+      for (const option of speedButtons) option.setAttribute("aria-pressed", String(option === button));
+    });
+  }
   $("select-all").addEventListener("click", selectAll);
   $("hold").addEventListener("click", () => command({}, "hold"));
   $("return-base").addEventListener("click", () => command({ x: 4, y: 13 }));
@@ -365,7 +380,7 @@
     const dt = lastFrame ? Math.min(.14, now - lastFrame) : 0;
     lastFrame = now;
     if (playable()) {
-      stepBank += dt;
+      stepBank += dt * speed;
       const step = 1 / 30;
       while (stepBank >= step && !match.winner) {
         match.tick(step);

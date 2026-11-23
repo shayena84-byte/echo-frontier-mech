@@ -325,6 +325,11 @@ const EchoSim = (() => {
         faction: shooter.faction, color: shooter.faction === FACTION.ally ? shooter.color || "#69f1c1" : "#ff826d",
         high: shooter.type === "base" ? 24 : shooter.type === "turret" ? 14 : 11,
         targetHigh: target.type === "base" ? 18 : target.type === "turret" ? 11 : 7,
+        mech: shooter.type === "mech" ? {
+          chassisId: shooter.chassisId, weaponId: shooter.weaponId, direction: shooter.direction,
+          moving: shooter.moving, foot: shooter.foot,
+        } : null,
+        targetChassis: target.chassisId,
       });
       if (target.hp > 0) return;
       this.effects.push({ type: "burst", x: target.x, y: target.y, life: 0.65, max: 0.65, faction: target.faction });

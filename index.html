@@ -7,10 +7,11 @@
   <meta name="description" content="Рубеж Эха — браузерная стратегия. Соберите отряд мехов, захватите станции и защитите лагерь.">
   <title>Рубеж Эха</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css">
-  <script defer src="simulation.js"></script>
-  <script defer src="renderer.js"></script>
-  <script defer src="app.js"></script>
+  <link rel="stylesheet" href="style.css?v=2">
+  <script defer src="simulation.js?v=2"></script>
+  <script defer src="mech-art.js?v=2"></script>
+  <script defer src="renderer.js?v=2"></script>
+  <script defer src="app.js?v=2"></script>
 </head>
 <body>
   <header class="command-bar">
@@ -39,6 +40,14 @@
       </div>
     </div>
     <div class="utilities">
+      <div class="speed-control" role="group" aria-label="Скорость игры">
+        <span aria-hidden="true">Скорость</span>
+        <div class="speed-options">
+          <button type="button" data-speed="1" aria-pressed="false" aria-label="Скорость 1, медленная" title="Медленная · 0,5×">1</button>
+          <button type="button" data-speed="2" aria-pressed="true" aria-label="Скорость 2, обычная" title="Обычная · 1×">2</button>
+          <button type="button" data-speed="3" aria-pressed="false" aria-label="Скорость 3, быстрая" title="Быстрая · 2×">3</button>
+        </div>
+      </div>
       <button class="utility" type="button" id="sound" aria-pressed="false">Звук выкл.</button>
       <button class="utility" type="button" id="pause" disabled>Пауза</button>
       <button class="utility help-button" type="button" id="help" aria-label="Управление и правила">?</button>
@@ -135,7 +144,10 @@
         <small class="build-detail" id="weapon-detail"></small>
         <div class="build-select"><label for="kit">Модуль</label><select id="kit" aria-describedby="kit-detail"></select></div>
         <small class="build-detail" id="kit-detail"></small>
-        <div class="cost" id="build-cost" aria-label="Стоимость сборки"></div>
+        <div class="assembly-overview">
+          <div class="cost" id="build-cost" aria-label="Стоимость сборки"></div>
+          <canvas id="mech-preview" width="216" height="128" role="img" aria-label="Внешний вид собираемого меха"></canvas>
+        </div>
         <button class="primary build-button" type="button" id="build" disabled>Собрать меха <kbd>F</kbd></button>
         <button class="secondary turret-button" type="button" id="turret" disabled></button>
       </section>
@@ -153,6 +165,7 @@
         <li>Щёлкните по земле или станции, чтобы отправить выбранный отряд. На сенсорном экране используйте касания.</li>
         <li>Щёлкните по дрону или красной базе для прицельной атаки. Мехи также стреляют автоматически по целям в радиусе своего оружия.</li>
         <li>Станция захватывается, пока ваш мех находится рядом. Присутствие дрона останавливает захват.</li>
+        <li>Кнопки скорости меняют темп всей игры. Уровень 1 — 0,5×, уровень 2 — 1×, уровень 3 — 2×. Таймеры показывают игровое время.</li>
         <li>Клавиши <kbd>1</kbd>–<kbd>8</kbd> выбирают меха, <kbd>G</kbd> выбирает весь отряд, <kbd>F</kbd> запускает сборку, <kbd>Пробел</kbd> ставит игру на паузу.</li>
       </ul>
     </div>
