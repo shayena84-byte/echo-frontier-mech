@@ -274,8 +274,9 @@ button:disabled { opacity: .47; }
 }
 .progress { height: 3px; background: #293c4b; border-radius: 4px; overflow: hidden; }
 .progress span { display: block; width: 0; height: 100%; background: var(--mint); transition: width .22s linear; }
-.mission-progress { margin: 9px 0 8px; }
-.mission-progress span { background: #a5ffd9; box-shadow: 0 0 10px #5addb7; }
+.citadel-gate { margin: 8px 0; border-color: #795051; }
+.citadel-gate .call { border-color: #a76059; color: #ffc1aa; background: #4a3033; }
+.camp-gate-warning { font-size: 12px; color: var(--rust); margin: 6px 0; }
 .base-status { display: flex; justify-content: space-between; gap: 7px; align-items: center; margin: 2px 0 4px; color: #b9ccd8; font-size: 12px; }
 .base-status strong { font: 650 12px var(--mono); color: var(--mint); }
 .base-progress span { width: 100%; }
@@ -296,7 +297,7 @@ kbd {
 .orders .secondary { flex: 1; min-height: 30px; font-size: 12px; }
 .empty-squad { display: block; color: var(--muted); margin: 3px 0; font-size: 13px; }
 
-.build-select { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 7px; font-size: 13px; }
+.build-select { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 7px; font-size: 13px; }
 .build-select label { color: #c5d7e2; }
 .build-select select {
   appearance: none;
@@ -309,7 +310,7 @@ kbd {
   padding: 5px 26px 5px 8px;
   cursor: pointer;
 }
-.build-detail { color: #a2b8c9; min-height: 15px; display: block; margin: 2px 0 0 72px; font-size: 12px; }
+.build-detail { color: #a2b8c9; min-height: 15px; display: block; margin: 2px 0 0 84px; font-size: 12px; }
 .assembly-overview {
   display: flex;
   align-items: center;

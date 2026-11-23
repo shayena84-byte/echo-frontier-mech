@@ -2,8 +2,8 @@
 
 (() => {
   const {
-    WIDTH, HEIGHT, MAX_MECHS, BUILD_SECONDS, SECURE_SECONDS, RESOURCES, FACTION, CHASSIS, WEAPONS, KIT,
-    TURRET_COST, DEFAULT_BUILD, Match, affordable, buildCost, clamp, nearestWalkable,
+    WIDTH, HEIGHT, MAX_MECHS, BUILD_SECONDS, BASE_CAPTURE_SECONDS, RESOURCES, FACTION, CHASSIS, WEAPONS, KIT,
+    TURRET_COST, DEFAULT_BUILD, Match, affordable, buildCost, equipmentFor, clamp, nearestWalkable,
   } = EchoSim;
   const resourceNames = ["сплав", "энергия", "данные"];
   const $ = (id) => document.getElementById(id);
@@ -13,8 +13,6 @@
   const buildQueue = $("build-queue");
   const speedButtons = [...document.querySelectorAll(".speed-options button")];
   const speeds = [0.5, 1, 2];
-  const buildIds = ["chassis", "weapon", "kit"];
-  const parts = [CHASSIS, WEAPONS, KIT];
   const format = new Intl.NumberFormat("ru", { maximumFractionDigits: 1 });
   const unitCards = new Map();
   const isFriendlyMech = (entity) => entity.type === "mech" && entity.faction === FACTION.ally;
@@ -101,9 +99,17 @@
   }
 
   function command(target, kind = "move") {
-    if (!ordersAllowed() || !match.setOrder([...selected], target, kind)) return false;
+    if (!ordersAllowed()) return false;
+    if (!match.setOrder([...selected], target, kind)) {
+      if (kind === "attack" && selected.size) {
+        match.log("Для атаки выберите меха с оружием.");
+        updatePanels();
+      }
+      return false;
+    }
+    const destination = kind === "capture" ? target.gate : target;
     view.marker = kind === "hold" ? null : {
-      x: target.x, y: target.y, time: performance.now() / 1000,
+      x: destination.x, y: destination.y, time: performance.now() / 1000,
       faction: kind === "attack" ? FACTION.hostile : FACTION.ally,
     };
     tone(kind === "attack" ? 365 : 620, .14, .045, 470);
@@ -164,19 +170,24 @@
     return { button, call, name, state };
   }
 
+  function bindCaptureControl(button, getSite) {
+    const sendToGate = () => {
+      const site = getSite();
+      if (command(site, "capture") && view.zoom > 1) view.zoomTo(view.zoom, site.gate);
+    };
+    onRightClick(button, sendToGate);
+    button.addEventListener("click", (event) => {
+      if (event.detail === 0 || touchClick(event)) sendToGate();
+    });
+  }
+
+  bindCaptureControl($("citadel-gate-order"), () => match.bases[1]);
   const nodeCards = match.nodes.map((node, index) => {
     const card = makeCard("station");
     card.name.textContent = node.name;
     card.call.textContent = node.call;
-    card.button.title = "Правый клик · отправить выбранных мехов · " + resourceNames[node.resource] + " +" + format.format(node.income) + "/с";
-    const sendToStation = () => {
-      const target = match.nodes[index];
-      if (command(target) && view.zoom > 1) view.zoomTo(view.zoom, target);
-    };
-    onRightClick(card.button, sendToStation);
-    card.button.addEventListener("click", (event) => {
-      if (event.detail === 0 || touchClick(event)) sendToStation();
-    });
+    card.button.title = "Правый клик · занять ворота станции · " + resourceNames[node.resource] + " +" + format.format(node.income) + "/с";
+    bindCaptureControl(card.button, () => match.nodes[index]);
     $("stations").append(card.button);
     return card;
   });
@@ -202,7 +213,7 @@
       if (!card) {
         card = makeCard("unit");
         card.name.textContent = unit.name;
-        card.button.title = WEAPONS[unit.weaponId].name + " · " + KIT[unit.kitId].name;
+        card.button.title = equipmentFor(unit.weaponId, unit.kitId).name;
         card.button.addEventListener("click", (event) => selectUnit(unit.id, event.shiftKey));
         unitCards.set(unit.id, card);
         $("units").append(card.button);
@@ -226,18 +237,26 @@
     $("build-cost").append(item);
     return item;
   });
-  const currentBuild = () => buildIds.map((id) => Number($(id).value));
-
-  for (const [index, id] of buildIds.entries()) {
-    const input = $(id);
-    for (const [value, part] of parts[index].entries()) {
-      input.append(new Option(part.name, value));
-    }
-    input.value = DEFAULT_BUILD[index];
-    input.addEventListener("change", updatePanels);
+  function currentBuild() {
+    const item = Number($("equipment").value);
+    const armed = item < WEAPONS.length;
+    return [Number($("chassis").value), armed ? item : null, armed ? null : item - WEAPONS.length];
   }
 
-  function updateBuildQueue(queue, paused) {
+  for (const [index, chassis] of CHASSIS.entries()) {
+    $("chassis").append(new Option(chassis.name, index));
+  }
+  for (const [index, item] of [...WEAPONS, ...KIT].entries()) {
+    $(index < WEAPONS.length ? "weapon-options" : "module-options").append(new Option(item.name, index));
+  }
+  $("chassis").value = DEFAULT_BUILD[0];
+  $("equipment").value = DEFAULT_BUILD[1] ?? WEAPONS.length + DEFAULT_BUILD[2];
+  for (const id of ["chassis", "equipment"]) {
+    $(id).addEventListener("change", updatePanels);
+  }
+  setText("mission-detail", "Удерживайте ворота Цитадели одним мехом " + BASE_CAPTURE_SECONDS + " игровых секунд. Станции дают ресурсы.");
+
+  function updateBuildQueue(queue, statusText) {
     if (queue.length !== shownQueue.length || queue.some((job, i) => job !== shownQueue[i])) {
       shownQueue = queue.slice();
       buildQueue.replaceChildren(...queue.map(({ build }, i) => {
@@ -246,7 +265,7 @@
         const details = document.createElement("small");
         const status = document.createElement("span");
         name.textContent = CHASSIS[build[0]].name;
-        details.textContent = WEAPONS[build[1]].name + " · " + KIT[build[2]].name;
+        details.textContent = equipmentFor(build[1], build[2]).name;
         status.className = "build-job-status";
         if (i === 0) status.id = "active-build-time";
         else status.textContent = "Ожидает";
@@ -259,9 +278,20 @@
     $("queue-empty").hidden = !!active;
     $("build-progress").hidden = !active;
     if (active) {
-      setText("active-build-time", (paused ? "Пауза · " : "Сборка · ") + buildEta(active.remaining));
+      setText("active-build-time", statusText + " · " + buildEta(active.remaining));
       setProgress("build-bar", 1 - active.remaining / BUILD_SECONDS);
     }
+  }
+
+  function gateStatus(gate, idleLabel) {
+    if (gate.contested) return "Оспариваются";
+    if (!gate.capturer) return idleLabel;
+    return (gate.faction === FACTION.ally ? "Захват " : "Дроны ") + Math.floor(gate.progress * 100) + "%";
+  }
+
+  function showGateProgress(button, gate) {
+    button.style.setProperty("--fill", gate.progress * 100 + "%");
+    button.style.setProperty("--meter", gate.faction === FACTION.ally ? "#79efc8" : "#ff9c80");
   }
 
   function updatePanels() {
@@ -274,37 +304,36 @@
     const income = match.income();
     for (const [i, id] of RESOURCES.entries()) {
       setText(id, Math.floor(bank[i]));
-      setText(id + "-rate", "+" + format.format(income[i]) + "/с");
+      setText(id + "-rate", "+" + format.format(base.hp > 0 ? income[i] : 0) + "/с");
     }
     const enemyOrder = enemy.queue[0];
-    setText("enemy-factory-queue", enemyOrder ? "Заказов · " + enemy.queue.length : "Очередь пуста");
-    $("enemy-factory-eta").hidden = !enemyOrder;
-    if (enemyOrder) setText("enemy-factory-eta", (paused ? "Пауза · " : "Сборка · ") + buildEta(enemyOrder.remaining));
+    setText("enemy-factory-queue", enemy.hp <= 0 ? "Завод остановлен" : enemyOrder ? "Заказов · " + enemy.queue.length : "Очередь пуста");
+    $("enemy-factory-eta").hidden = !enemyOrder || enemy.hp <= 0;
+    if (enemyOrder && enemy.hp > 0) setText("enemy-factory-eta", (paused ? "Пауза · " : "Сборка · ") + buildEta(enemyOrder.remaining));
     const event = match.news[0];
     setText("event-text", event.message);
     $("event-dot").className = event.tone;
 
     const controlled = match.nodes.filter((node) => node.faction === FACTION.ally).length;
     setText("node-count", controlled + " / " + match.nodes.length);
-    setText("mission-detail", match.secure > 0
-      ? "Передача сигнала. Удерживайте станции ещё " + Math.max(0, Math.ceil(SECURE_SECONDS - match.secure)) + " с."
-      : "Захватите все станции и удержите их 24 секунды или уничтожьте Цитадель дронов.");
-    setProgress("secure-bar", match.secure / SECURE_SECONDS);
+    renderSquad(allies, canOrder);
+    const citadelButton = $("citadel-gate-order");
+    citadelButton.disabled = !canOrder || !selected.size;
+    setText("citadel-gate-status", gateStatus(enemy.gate, "К захвату"));
+    showGateProgress(citadelButton, enemy.gate);
+    $("camp-gate-status").hidden = !base.gate.capturer && !base.gate.contested;
+    setText("camp-gate-status", "Ворота лагеря · " + gateStatus(base.gate, ""));
     const hull = base.hp / base.hull;
     setProgress("base-bar", hull);
-    setText("base-hp", Math.ceil(hull * 100) + "%");
+    setText("base-hp", base.hp > 0 ? Math.ceil(hull * 100) + "%" : "Отключена");
     $("base-bar").style.background = hull < .35 ? "#ff947c" : "";
-    renderSquad(allies, canOrder);
     for (const [index, node] of match.nodes.entries()) {
       const { button, state } = nodeCards[index];
       const color = node.faction === FACTION.ally ? "ally" : node.faction === FACTION.hostile ? "hostile" : "";
       button.className = "station " + color;
       button.disabled = !canOrder || !selected.size;
-      const progress = Math.round(Math.abs(node.influence) * 100);
-      state.textContent = node.contested ? "Спорная" : color === "ally" ? "Наша" : color === "hostile" ? "Дроны"
-        : progress > 0 ? progress + "%" : "Свободна";
-      button.style.setProperty("--fill", progress + "%");
-      button.style.setProperty("--meter", node.influence > 0 ? "#79efc8" : "#ff9c80");
+      state.textContent = gateStatus(node.gate, color === "ally" ? "Наша" : color === "hostile" ? "Дроны" : "Свободна");
+      showGateProgress(button, node.gate);
     }
 
     $("select-all").disabled = !canOrder || !allies.length;
@@ -323,14 +352,15 @@
       lastPreview = preview;
     }
     const cost = buildCost(design);
-    for (const [i, id] of buildIds.entries()) {
-      setText(id + "-detail", parts[i][design[i]].detail);
-      costs[i].textContent = cost[i];
-      costs[i].classList.toggle("insufficient", bank[i] < cost[i]);
+    setText("chassis-detail", CHASSIS[design[0]].detail);
+    setText("equipment-detail", equipmentFor(design[1], design[2]).detail);
+    for (const [i, price] of cost.entries()) {
+      costs[i].textContent = price;
+      costs[i].classList.toggle("insufficient", bank[i] < price);
     }
     setText("factory-state", (allies.length + queue.length) + " / " + MAX_MECHS + " мест");
     $("build").disabled = !canOrder || !match.canBuild(design);
-    updateBuildQueue(queue, paused);
+    updateBuildQueue(queue, base.hp <= 0 ? "Завод остановлен" : paused ? "Пауза" : "Сборка");
     const freeSocket = match.freePad();
     setText("turret", freeSocket ? "Турель «Дозор» · " + TURRET_COST.join(" / ") : "Турели развёрнуты");
     $("turret").title = TURRET_COST.map((value, i) => value + " · " + resourceNames[i]).join(", ");
@@ -393,7 +423,10 @@
 
   function commandOnMap(screen) {
     const target = view.hitTest(match, screen, isOrderTarget);
-    if (target) return command(target, target.type ? "attack" : "move");
+    if (target?.type === "mech" || target?.type === "turret") return command(target, "attack");
+    const site = view.hitTestGate(match, screen);
+    if (site) return command(site, "capture");
+    if (target) return command(target, target.type ? "attack" : "capture");
 
     const point = view.unproject(screen.x, screen.y);
     if (point.x >= -.65 && point.y >= -.65 && point.x <= WIDTH - .35 && point.y <= HEIGHT - .35) {

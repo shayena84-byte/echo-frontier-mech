@@ -195,8 +195,8 @@ const MechArt = (() => {
     }
     for (let i = 0; i < 3; i++) armor(mesh, -5.8 + 1.55 * i, 1.15, top - .23, .65, 3.4, .95, "inset");
 
-    equipment(mesh, kitId, profile, deck);
-    armament(mesh, mount(profile, chassisId, weaponId, deck), weaponId);
+    if (kitId !== null) equipment(mesh, kitId, profile, deck);
+    if (weaponId !== null) armament(mesh, mount(profile, chassisId, weaponId, deck), weaponId);
     return mesh;
   }
 
@@ -287,6 +287,7 @@ const MechArt = (() => {
 
   function muzzle(unit, still) {
     const { chassisId, weaponId, direction } = unit;
+    if (weaponId === null) return [0, 0];
     const profile = PROFILES[chassisId];
     const gait = gaitIndex(unit, still);
     const bob = chassisId !== 2 && gait > 0 ? -.85 * (1 + Math.cos((gait - 1) * TAU * 2 / WALK_FRAMES)) : 0;

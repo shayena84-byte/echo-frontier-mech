@@ -138,6 +138,15 @@ const FrontierView = (() => {
       return Math.abs(screen.x - point.x) <= halfWidth;
     }
 
+    hitTestGate(match, screen) {
+      const s = this.scale;
+      return match.sites.find((site) => {
+        const p = this.project(site.gate.x, site.gate.y);
+        return Math.abs(screen.x - p.x) <= Math.max(10, 19 * s) &&
+          screen.y >= p.y - Math.max(12, 28 * s) && screen.y <= p.y + Math.max(6, 10 * s);
+      });
+    }
+
     drawBackground(ctx) {
       const w = this.width;
       const h = this.height;
@@ -274,15 +283,6 @@ const FrontierView = (() => {
       ctx.translate(p.x, p.y);
       ctx.scale(this.scale, this.scale);
       ellipse(ctx, 0, 0, 34, 17, tint + "12", tint + "6b", 1.6);
-      const progress = Math.abs(node.influence);
-      if (progress > 0) {
-        ctx.beginPath();
-        ctx.ellipse(0, 0, 34, 17, 0, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * progress);
-        ctx.strokeStyle = POLARITY(Math.sign(node.influence));
-        ctx.lineWidth = 2.7;
-        ctx.stroke();
-      }
-      if (node.contested) ellipse(ctx, 0, 0, 38, 19, null, "#ffcc8a", 1.6);
       box(ctx, 0, 0, 19, 9, 5, "#4a6774", "#263f4e", "#355465");
       box(ctx, 0, -4, 9, 4, 12, "#73949b", "#314b61", "#47706e");
       line(ctx, [[0, -17], [0, -36], [9, -40]], tint, 2);
@@ -292,6 +292,33 @@ const FrontierView = (() => {
       ellipse(ctx, 0, -36, 3, 3, "#e4fffc", tint, 1);
       ctx.restore();
       this.tag(ctx, node.name, p.x, p.y + Math.max(18, 24 * this.scale), tint, true);
+    }
+
+    drawGate(ctx, site) {
+      const { gate } = site;
+      const p = this.project(gate.x, gate.y);
+      const tint = gate.contested ? "#ffcc8a" : POLARITY(gate.faction || site.faction);
+      const span = gate.x === site.x ? 15 : -15;
+      const far = [-span, -7];
+      const near = [span, 7];
+      const height = 22;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.scale(this.scale, this.scale);
+      ellipse(ctx, 0, 0, 17, 9, tint + "30", tint + "a0", 1.4);
+      if (gate.progress > 0) {
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 19, 10, 0, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * gate.progress);
+        ctx.strokeStyle = tint;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      }
+      box(ctx, ...far, 4.6, 2.5, height, tint, "#3b576e", "#4c6475");
+      line(ctx, [[far[0], far[1] - height + 1], [near[0], near[1] - height + 1]], "#192d3d", 6);
+      box(ctx, ...near, 4.6, 2.5, height, tint, "#3b576e", "#4c6475");
+      line(ctx, [[far[0], far[1] - height - 1], [near[0], near[1] - height - 1]], tint, 2.8);
+      line(ctx, [[0, -height - 5], [0, -height + 3]], "#e0f3ff", 2);
+      ctx.restore();
     }
 
     drawPad(ctx, pad) {
@@ -434,12 +461,14 @@ const FrontierView = (() => {
       ctx.drawImage(this.buffer, 0, 0, this.width, this.height);
       this.drawPaths(ctx, match, selected);
       for (const pad of match.pads) this.drawPad(ctx, pad);
+      const gates = match.sites.map((site) => ({ x: site.gate.x, y: site.gate.y, type: "gate", site }));
       const figures = [...this.scenery,
-        ...match.nodes, ...match.bases, ...match.units, ...match.pads.map((pad) => pad.turret).filter((t) => t && t.hp > 0)]
+        ...match.sites, ...gates, ...match.units, ...match.pads.map((pad) => pad.turret).filter((t) => t && t.hp > 0)]
         .sort((a, b) => a.x + a.y - b.x - b.y);
       for (const thing of figures) {
         if (thing.grit !== undefined) this.drawScenery(ctx, thing);
         else if (thing.type === "base") this.drawBase(ctx, thing);
+        else if (thing.type === "gate") this.drawGate(ctx, thing.site);
         else if (thing.type === "turret") this.drawTurret(ctx, thing);
         else if (thing.type === "mech") this.drawMech(ctx, thing, selected.has(thing.id));
         else this.drawNode(ctx, thing, now);

@@ -7,11 +7,11 @@
   <meta name="description" content="Рубеж Эха — браузерная стратегия. Соберите отряд мехов, захватите станции и защитите лагерь.">
   <title>Рубеж Эха</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=4">
-  <script defer src="simulation.js?v=4"></script>
-  <script defer src="mech-art.js?v=2"></script>
-  <script defer src="renderer.js?v=4"></script>
-  <script defer src="app.js?v=4"></script>
+  <link rel="stylesheet" href="style.css?v=5">
+  <script defer src="simulation.js?v=5"></script>
+  <script defer src="mech-art.js?v=5"></script>
+  <script defer src="renderer.js?v=5"></script>
+  <script defer src="app.js?v=5"></script>
 </head>
 <body>
   <header class="command-bar">
@@ -84,7 +84,7 @@
         <div class="screen-card">
           <div class="screen-kicker">Операция «Связной»</div>
           <h2>Верните связь<br>с орбитой.</h2>
-          <p>После аварийной посадки ваш отряд обнаружил три станции. Подключите их к лагерю, пока дроны не захватили каньон.</p>
+          <p>Цитадель дронов глушит сигнал. Займите её ворота, чтобы восстановить связь. Захваченные станции обеспечат лагерь ресурсами.</p>
           <button class="primary" type="button" id="launch">Начать операцию</button>
         </div>
       </div>
@@ -109,10 +109,13 @@
           <h2>Станции связи</h2>
           <span class="panel-count" id="node-count">0 / 3</span>
         </div>
-        <p class="explain" id="mission-detail">Захватите все станции и удержите их 24 секунды или уничтожьте Цитадель дронов.</p>
+        <p class="explain" id="mission-detail">Займите ворота Цитадели одним мехом. Станции дают ресурсы.</p>
         <div class="stations" id="stations"></div>
-        <div class="progress mission-progress" aria-label="Передача сигнала"><span id="secure-bar"></span></div>
-        <div class="base-status"><span>Лагерь «Эхо»</span><strong id="base-hp">100%</strong></div>
+        <button class="station citadel-gate" type="button" id="citadel-gate-order" title="Правый клик · занять ворота Цитадели" disabled>
+          <span class="call" aria-hidden="true">Ц</span><strong>Ворота Цитадели</strong><small id="citadel-gate-status">К захвату</small>
+        </button>
+        <p class="camp-gate-warning" id="camp-gate-status" hidden></p>
+        <div class="base-status"><span>Оборона лагеря</span><strong id="base-hp">100%</strong></div>
         <div class="progress base-progress" aria-label="Прочность лагеря"><span id="base-bar"></span></div>
       </section>
 
@@ -135,10 +138,14 @@
         </div>
         <div class="build-select"><label for="chassis">Шасси</label><select id="chassis" aria-describedby="chassis-detail"></select></div>
         <small class="build-detail" id="chassis-detail"></small>
-        <div class="build-select"><label for="weapon">Оружие</label><select id="weapon" aria-describedby="weapon-detail"></select></div>
-        <small class="build-detail" id="weapon-detail"></small>
-        <div class="build-select"><label for="kit">Модуль</label><select id="kit" aria-describedby="kit-detail"></select></div>
-        <small class="build-detail" id="kit-detail"></small>
+        <div class="build-select">
+          <label for="equipment">Оснащение</label>
+          <select id="equipment" aria-describedby="equipment-detail">
+            <optgroup id="weapon-options" label="Оружие"></optgroup>
+            <optgroup id="module-options" label="Модули"></optgroup>
+          </select>
+        </div>
+        <small class="build-detail" id="equipment-detail"></small>
         <div class="assembly-overview">
           <div class="cost" id="build-cost" aria-label="Стоимость сборки"></div>
           <canvas id="mech-preview" width="216" height="128" role="img" aria-label="Внешний вид собираемого меха"></canvas>
@@ -166,10 +173,12 @@
       </div>
       <ul>
         <li>Левый клик по своему меху или его карточке выбирает его. Удерживайте <kbd>Shift</kbd>, чтобы выбрать несколько мехов.</li>
-        <li>Правый клик по земле задаёт маршрут, по станции или её карточке отправляет мехов на захват, по дрону или Цитадели отдаёт приказ атаковать. На сенсорном экране используйте касания.</li>
+        <li>Правый клик по земле задаёт маршрут, по воротам или карточке отправляет меха на захват, по дрону или зданию Цитадели отдаёт приказ атаковать. На сенсорном экране используйте касания.</li>
+        <li>При групповом приказе один мех занимает ворота, остальные прикрывают его. Если он уйдёт или будет уничтожен, захват начнётся заново. Противник в воротах приостанавливает захват.</li>
+        <li>Для победы удержите ворота Цитадели. Обстрел базы выводит из строя оборону и завод. Дроны могут захватить лагерь по тем же правилам.</li>
         <li>На паузе можно выбрать мехов и отдать им приказы. Отряд начнёт их выполнять после возобновления миссии.</li>
         <li>Заказывайте мехов в мастерской даже на паузе. Ресурсы списываются при заказе. Обе стороны собирают по одному меху за 4,2 игровой секунды.</li>
-        <li>Станция захватывается, пока ваш мех находится рядом. Присутствие дрона останавливает захват.</li>
+        <li>Меху нужны шасси и одно оснащение. Оружие позволяет стрелять, модуль ускоряет захват, усиливает броню или ремонтирует меха.</li>
         <li>Кнопки скорости меняют темп всей игры. Уровень 1 — 0,5×, уровень 2 — 1×, уровень 3 — 2×. Таймеры показывают игровое время.</li>
         <li>Клавиши <kbd>1</kbd>–<kbd>8</kbd> выбирают меха, <kbd>G</kbd> выбирает весь отряд, <kbd>F</kbd> добавляет заказ в очередь, <kbd>Пробел</kbd> ставит игру на паузу.</li>
       </ul>
