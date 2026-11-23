@@ -113,7 +113,8 @@ const FrontierView = (() => {
       const s = this.scale;
       let chosen = null;
       let best = Infinity;
-      for (const entity of [...match.nodes, ...match.entities()]) {
+      const disabledBases = match.bases.filter((base) => base.hp <= 0);
+      for (const entity of [...match.nodes, ...match.entities(), ...disabledBases]) {
         if (!accepts(entity)) continue;
         const point = this.project(entity.x, entity.y);
         const isNode = !entity.type;

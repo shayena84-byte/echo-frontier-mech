@@ -193,9 +193,7 @@
       if (command(site, "capture") && view.zoom > 1) view.zoomTo(view.zoom, site.gate);
     };
     onRightClick(button, sendToGate);
-    button.addEventListener("click", (event) => {
-      if (event.detail === 0 || touchClick(event)) sendToGate();
-    });
+    button.addEventListener("click", sendToGate);
   }
 
   bindCaptureControl($("citadel-gate-order"), () => match.bases[1]);
@@ -203,7 +201,7 @@
     const card = makeCard("station");
     card.name.textContent = node.name;
     card.call.textContent = node.call;
-    card.button.title = "Правый клик · занять ворота станции · " + resourceNames[node.resource] + " +" + format.format(node.income) + "/с";
+    card.button.title = "Занять ворота станции · " + resourceNames[node.resource] + " +" + format.format(node.income) + "/с";
     bindCaptureControl(card.button, () => match.nodes[index]);
     $("stations").append(card.button);
     return card;
@@ -339,9 +337,11 @@
     const controlled = match.nodes.filter((node) => node.faction === FACTION.ally).length;
     setText("node-count", controlled + " / " + match.nodes.length);
     renderSquad(allies, canOrder);
+    const incoming = new Set(allies.filter((unit) => unit.order.continuous).map((unit) => unit.order.target));
     const citadelButton = $("citadel-gate-order");
     citadelButton.disabled = !canOrder || !selected.size;
-    setText("citadel-gate-status", gateStatus(enemy.gate, "К захвату"));
+    const citadelStatus = incoming.has(enemy.id) ? "Мех в пути" : enemy.hp <= 0 ? "Оборона отключена" : "К захвату";
+    setText("citadel-gate-status", gateStatus(enemy.gate, citadelStatus));
     showGateProgress(citadelButton, enemy.gate);
     $("camp-gate-status").hidden = !base.gate.capturer && !base.gate.contested;
     setText("camp-gate-status", "Ворота лагеря · " + gateStatus(base.gate, ""));
@@ -354,7 +354,8 @@
       const color = node.faction === FACTION.ally ? "ally" : node.faction === FACTION.hostile ? "hostile" : "";
       button.className = "station " + color;
       button.disabled = !canOrder || !selected.size;
-      state.textContent = gateStatus(node.gate, color === "ally" ? "Наша" : color === "hostile" ? "Дроны" : "Свободна");
+      const owner = color === "ally" ? "Наша" : color === "hostile" ? "Дроны" : "Свободна";
+      state.textContent = gateStatus(node.gate, incoming.has(node.id) ? "Мех в пути" : owner);
       showGateProgress(button, node.gate);
     }
 
@@ -461,7 +462,7 @@
     if (target?.type === "mech" || target?.type === "turret") return command(target, "attack");
     const site = view.hitTestGate(match, screen);
     if (site) return command(site, "capture");
-    if (target) return command(target, target.type ? "attack" : "capture");
+    if (target) return command(target, target.type === "base" && target.hp > 0 ? "attack" : "capture");
 
     const point = view.unproject(screen.x, screen.y);
     if (point.x >= -.65 && point.y >= -.65 && point.x <= WIDTH - .35 && point.y <= HEIGHT - .35) {

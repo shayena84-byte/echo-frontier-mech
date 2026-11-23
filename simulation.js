@@ -7,6 +7,7 @@ const EchoSim = (() => {
   const BUILD_SECONDS = 4.2;
   const STATION_CAPTURE_SECONDS = 5.8;
   const BASE_CAPTURE_SECONDS = 12;
+  const BASE_TARGET_RANGE_BONUS = .5;
   const GATE_RADIUS = .4;
   const RESOURCES = ["alloy", "energy", "signal"];
   const FACTION = Object.freeze({ neutral: 0, ally: 1, hostile: -1 });
@@ -269,6 +270,7 @@ const EchoSim = (() => {
     }
 
     setOrder(ids, target, kind = "move") {
+      if (kind === "attack" && target.type === "base" && target.hp <= 0) kind = "capture";
       const active = this.allies().filter((unit) => ids.includes(unit.id) && (kind !== "attack" || unit.range > 0));
       if (kind === "capture" && active.length) {
         const lead = active.reduce((best, unit) => distance(unit, target.gate) < distance(best, target.gate) ? unit : best);
@@ -288,19 +290,24 @@ const EchoSim = (() => {
 
     captureNearest(ids) {
       const group = this.allies().filter((unit) => ids.includes(unit.id));
+      const closest = this.findNearestCapture(group);
+      if (!closest) return null;
+      this.orderGroupCapture(group, closest.unit, closest.site);
+      return closest.site;
+    }
+
+    findNearestCapture(group, sites = this.sites) {
       let closest = null;
-      for (const site of this.sites) {
-        if (site.faction === FACTION.ally) continue;
+      for (const site of sites) {
         for (const unit of group) {
+          if (site.faction === unit.faction) continue;
           const path = findPath(this.terrain, unit, site.gate);
-          if (!path.length) continue;
+          if (!path.length || distance(path.at(-1), site.gate) > GATE_RADIUS) continue;
           const length = path.reduce((sum, point, i) => sum + distance(i ? path[i - 1] : unit, point), 0);
           if (!closest || length < closest.length) closest = { site, unit, length };
         }
       }
-      if (!closest) return null;
-      this.orderGroupCapture(group, closest.unit, closest.site);
-      return closest.site;
+      return closest;
     }
 
     attackNearestMech(ids) {
@@ -320,12 +327,13 @@ const EchoSim = (() => {
     }
 
     orderGroupCapture(group, lead, site) {
-      this.orderCapture(lead, site);
+      this.orderCapture(lead, site, site.faction !== lead.faction);
+      const escort = lead.order.continuous ? lead.order : null;
       const positions = this.coverPositions(site);
       for (const unit of group) {
         if (unit === lead) continue;
         const position = positions.shift();
-        this.giveOrder(unit, position ? { kind: "move", ...position } : { kind: "hold" });
+        this.giveOrder(unit, { kind: position ? "move" : "hold", ...position, escort });
       }
     }
 
@@ -335,9 +343,37 @@ const EchoSim = (() => {
       unit.replan = 0;
     }
 
-    orderCapture(unit, site) {
-      if (unit.order.kind === "capture" && unit.order.target === site.id) return;
-      this.giveOrder(unit, { kind: "capture", target: site.id, x: site.gate.x, y: site.gate.y });
+    orderCapture(unit, site, continuous = false) {
+      if (unit.order.kind === "capture" && unit.order.target === site.id && unit.order.continuous === continuous) return;
+      this.giveOrder(unit, { kind: "capture", target: site.id, x: site.gate.x, y: site.gate.y, continuous });
+    }
+
+    continueCaptures() {
+      for (const lead of this.allies()) {
+        const { order } = lead;
+        if (!order.continuous) continue;
+        const site = this.sites.find(({ id }) => id === order.target);
+        if (site.faction !== lead.faction) continue;
+        const group = [lead, ...this.units.filter((unit) => unit.hp > 0 && unit.order.escort === order)];
+        const next = this.findNearestCapture([lead]);
+        if (next) this.orderGroupCapture(group, lead, next.site);
+        else for (const unit of group) this.giveOrder(unit, { kind: "hold" });
+      }
+    }
+
+    advanceBaseAssault(shooter, base, weaponRange) {
+      const allies = this.mechs(shooter.faction);
+      if (allies.some((unit) => unit.id === base.gate.capturer ||
+          (unit.order.kind === "capture" && unit.order.target === base.id))) return;
+
+      const attackers = allies.filter((unit) => unit.order.kind === "attack" && unit.order.target === base.id);
+      if (!attackers.length && shooter.type === "mech" && !shooter.order.escort) {
+        const { kind } = shooter.order;
+        const closingIn = kind === "move" && distance(shooter.order, base) <= weaponRange + BASE_TARGET_RANGE_BONUS;
+        if (kind === "hold" || closingIn) attackers.push(shooter);
+      }
+      const closest = this.findNearestCapture(attackers, [base]);
+      if (closest) this.orderGroupCapture(attackers, closest.unit, base);
     }
 
     coverPositions(site) {
@@ -419,7 +455,7 @@ const EchoSim = (() => {
       const [camp, citadel] = this.bases;
       const goals = this.nodes.filter((node) => node.faction !== FACTION.hostile)
         .sort((a, b) => distance(citadel, a.gate) - distance(citadel, b.gate));
-      if (!goals.length) goals.push(camp);
+      if (!goals.length || camp.hp <= 0) goals.unshift(camp);
       if (citadel.gate.faction === FACTION.ally) goals.unshift(citadel);
 
       const available = enemies.slice();
@@ -497,6 +533,7 @@ const EchoSim = (() => {
         const allied = target.faction === FACTION.ally;
         this.log(allied ? "Оборона лагеря отключена. Защитите ворота." : "Оборона Цитадели отключена. Займите ворота.",
           allied ? "hostile" : "ally");
+        this.advanceBaseAssault(shooter, target, weapon.range);
       }
     }
 
@@ -510,7 +547,8 @@ const EchoSim = (() => {
         orderedTarget = entities.find((target) => target.id === unit.order.target && target.hp > 0);
         if (!orderedTarget) this.giveOrder(unit, { kind: "hold" });
       }
-      const inRange = (target, range) => distance(unit, target) <= range + (target.type === "base" ? 0.5 : 0);
+      const inRange = (target, range) =>
+        distance(unit, target) <= range + (target.type === "base" ? BASE_TARGET_RANGE_BONUS : 0);
       if (orderedTarget && inRange(orderedTarget, unit.range)) {
         unit.path.length = 0;
       } else {
@@ -636,6 +674,7 @@ const EchoSim = (() => {
       for (const unit of this.units) if (unit.hp > 0) this.updateUnit(unit, entities, dt);
       this.units = this.units.filter((unit) => unit.hp > 0);
       this.updateCaptures(dt);
+      if (!this.winner) this.continueCaptures();
       for (const effect of this.effects) effect.life -= dt;
       this.effects = this.effects.filter((effect) => effect.life > 0);
 
