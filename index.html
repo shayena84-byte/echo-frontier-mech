@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0c151e">
+  <meta name="description" content="Рубеж Эха — браузерная стратегия. Соберите отряд мехов, захватите станции и защитите лагерь.">
+  <title>Рубеж Эха</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+  <script defer src="simulation.js"></script>
+  <script defer src="renderer.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <header class="command-bar">
+    <div class="brand">
+      <div class="brand-sign" aria-hidden="true"><span></span></div>
+      <div>
+        <h1>Рубеж <em>Эха</em></h1>
+        <p>Тактическая стратегия</p>
+      </div>
+    </div>
+    <div class="resources" aria-label="Ресурсы лагеря">
+      <div class="resource alloy">
+        <span class="resource-symbol" aria-hidden="true"></span>
+        <div><span class="resource-title">Сплав</span><strong id="alloy">164</strong></div>
+        <small id="alloy-rate">+2,4/с</small>
+      </div>
+      <div class="resource energy">
+        <span class="resource-symbol" aria-hidden="true"></span>
+        <div><span class="resource-title">Энергия</span><strong id="energy">115</strong></div>
+        <small id="energy-rate">+1,8/с</small>
+      </div>
+      <div class="resource signal">
+        <span class="resource-symbol" aria-hidden="true"></span>
+        <div><span class="resource-title">Данные</span><strong id="signal">14</strong></div>
+        <small id="signal-rate">+0,3/с</small>
+      </div>
+    </div>
+    <div class="utilities">
+      <button class="utility" type="button" id="sound" aria-pressed="false">Звук выкл.</button>
+      <button class="utility" type="button" id="pause" disabled>Пауза</button>
+      <button class="utility help-button" type="button" id="help" aria-label="Управление и правила">?</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="battlefield" id="battlefield" aria-label="Поле боя">
+      <canvas id="terrain" aria-label="Карта каньона. Выберите меха и укажите цель." tabindex="0"></canvas>
+      <div class="field-header">
+        <div class="sector">
+          <span class="sector-cap">Сектор</span>
+          <strong>Каньон Вектра</strong>
+        </div>
+        <div id="wave-panel" class="wave-panel">
+          <span id="wave-label">Первая волна</span>
+          <strong id="wave-clock">00:34</strong>
+        </div>
+      </div>
+      <div class="zoom-tools" aria-label="Масштаб карты">
+        <button type="button" id="zoom-out" aria-label="Уменьшить масштаб">−</button>
+        <button type="button" id="zoom-in" aria-label="Увеличить масштаб">+</button>
+      </div>
+      <div class="field-bottom">
+        <div class="field-log" aria-live="polite"><span id="event-dot"></span><span id="event-text">Связь с лагерем «Эхо» установлена.</span></div>
+        <div class="legend" aria-label="Обозначения на карте">
+          <span class="legend-ally">Отряд</span><span class="legend-neutral">Нейтрал.</span><span class="legend-hostile">Дроны</span>
+        </div>
+      </div>
+
+      <div class="screen introduction" id="intro">
+        <div class="screen-card">
+          <div class="screen-kicker">Операция «Связной»</div>
+          <h2>Верните связь<br>с орбитой.</h2>
+          <p>После аварийной посадки ваш отряд обнаружил три станции. Подключите их к лагерю, пока дроны не захватили каньон.</p>
+          <button class="primary" type="button" id="launch">Начать операцию</button>
+        </div>
+      </div>
+      <div class="screen" id="pause-screen" hidden>
+        <div class="screen-card compact">
+          <h2>Пауза</h2>
+          <p>Приказы отряда и таймер наступления приостановлены.</p>
+          <button class="primary" type="button" id="resume">Продолжить</button>
+        </div>
+      </div>
+      <div class="screen" id="end-screen" hidden>
+        <div class="screen-card compact">
+          <div class="screen-kicker" id="end-kicker">Операция завершена</div>
+          <h2 id="end-title">Победа</h2>
+          <p id="end-reason"></p>
+          <dl class="result-metrics">
+            <div><dt>Время</dt><dd id="result-time">00:00</dd></div>
+            <div><dt>Дронов сбито</dt><dd id="result-kills">0</dd></div>
+          </dl>
+          <button class="primary" type="button" id="restart">Новая операция</button>
+        </div>
+      </div>
+      <noscript>Включите JavaScript в браузере, чтобы начать операцию.</noscript>
+    </section>
+
+    <aside class="console" aria-label="Управление операцией">
+      <section class="panel mission">
+        <div class="panel-heading">
+          <h2>Станции связи</h2>
+          <span class="panel-count" id="node-count">0 / 3</span>
+        </div>
+        <p class="explain" id="mission-detail">Захватите все станции и удержите их 24 секунды или уничтожьте Цитадель дронов.</p>
+        <div class="stations" id="stations"></div>
+        <div class="progress mission-progress" aria-label="Передача сигнала"><span id="secure-bar"></span></div>
+        <div class="base-status"><span>Лагерь «Эхо»</span><strong id="base-hp">100%</strong></div>
+        <div class="progress base-progress" aria-label="Прочность лагеря"><span id="base-bar"></span></div>
+      </section>
+
+      <section class="panel squad">
+        <div class="panel-heading">
+          <h2>Отряд</h2>
+          <button class="text-button" type="button" id="select-all" disabled>Выбрать всех <kbd>G</kbd></button>
+        </div>
+        <div class="unit-list" id="units"></div>
+        <div class="orders">
+          <button class="secondary" type="button" id="hold" disabled>Удерживать</button>
+          <button class="secondary" type="button" id="return-base" disabled>На ремонт</button>
+        </div>
+      </section>
+
+      <section class="panel factory">
+        <div class="panel-heading">
+          <h2>Мастерская</h2>
+          <span class="panel-count" id="factory-state">Готова</span>
+        </div>
+        <div class="build-select"><label for="chassis">Шасси</label><select id="chassis" aria-describedby="chassis-detail"></select></div>
+        <small class="build-detail" id="chassis-detail"></small>
+        <div class="build-select"><label for="weapon">Оружие</label><select id="weapon" aria-describedby="weapon-detail"></select></div>
+        <small class="build-detail" id="weapon-detail"></small>
+        <div class="build-select"><label for="kit">Модуль</label><select id="kit" aria-describedby="kit-detail"></select></div>
+        <small class="build-detail" id="kit-detail"></small>
+        <div class="cost" id="build-cost" aria-label="Стоимость сборки"></div>
+        <button class="primary build-button" type="button" id="build" disabled>Собрать меха <kbd>F</kbd></button>
+        <button class="secondary turret-button" type="button" id="turret" disabled></button>
+      </section>
+    </aside>
+  </main>
+
+  <dialog id="manual" aria-labelledby="manual-title">
+    <div class="manual-content">
+      <div class="panel-heading">
+        <h2 id="manual-title">Управление</h2>
+        <button class="utility help-button" type="button" id="close-help" aria-label="Закрыть справку">×</button>
+      </div>
+      <ul>
+        <li>Нажмите на своего меха или его карточку, чтобы выбрать его.</li>
+        <li>Щёлкните по земле или станции, чтобы отправить выбранный отряд. На сенсорном экране используйте касания.</li>
+        <li>Щёлкните по дрону или красной базе для прицельной атаки. Мехи также стреляют автоматически по целям в радиусе своего оружия.</li>
+        <li>Станция захватывается, пока ваш мех находится рядом. Присутствие дрона останавливает захват.</li>
+        <li>Клавиши <kbd>1</kbd>–<kbd>8</kbd> выбирают меха, <kbd>G</kbd> выбирает весь отряд, <kbd>F</kbd> запускает сборку, <kbd>Пробел</kbd> ставит игру на паузу.</li>
+      </ul>
+    </div>
+  </dialog>
+</body>
+</html>
