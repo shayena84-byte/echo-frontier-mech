@@ -2,7 +2,7 @@
 
 (() => {
   const {
-    WIDTH, HEIGHT, MAX_MECHS, SECURE_SECONDS, RESOURCES, FACTION, CHASSIS, WEAPONS, KIT,
+    WIDTH, HEIGHT, MAX_MECHS, BUILD_SECONDS, SECURE_SECONDS, RESOURCES, FACTION, CHASSIS, WEAPONS, KIT,
     TURRET_COST, DEFAULT_BUILD, Match, affordable, buildCost, clamp, nearestWalkable,
   } = EchoSim;
   const resourceNames = ["сплав", "энергия", "данные"];
@@ -10,6 +10,7 @@
   const canvas = $("terrain");
   const view = new FrontierView(canvas);
   const manual = $("manual");
+  const buildQueue = $("build-queue");
   const speedButtons = [...document.querySelectorAll(".speed-options button")];
   const speeds = [0.5, 1, 2];
   const buildIds = ["chassis", "weapon", "kit"];
@@ -29,12 +30,14 @@
   let stepBank = 0;
   let speed = speeds[1];
   let lastPreview = "";
+  let shownQueue = [];
   let pointerType = "";
 
   const timeText = (seconds) => {
     const rounded = Math.max(0, Math.ceil(seconds));
     return String(Math.floor(rounded / 60)).padStart(2, "0") + ":" + String(rounded % 60).padStart(2, "0");
   };
+  const buildEta = (seconds) => format.format(Math.ceil(seconds * 10) / 10) + " с";
 
   function setText(id, value) {
     const element = $(id);
@@ -234,19 +237,49 @@
     input.addEventListener("change", updatePanels);
   }
 
+  function updateBuildQueue(queue, paused) {
+    if (queue.length !== shownQueue.length || queue.some((job, i) => job !== shownQueue[i])) {
+      shownQueue = queue.slice();
+      buildQueue.replaceChildren(...queue.map(({ build }, i) => {
+        const row = document.createElement("li");
+        const name = document.createElement("strong");
+        const details = document.createElement("small");
+        const status = document.createElement("span");
+        name.textContent = CHASSIS[build[0]].name;
+        details.textContent = WEAPONS[build[1]].name + " · " + KIT[build[2]].name;
+        status.className = "build-job-status";
+        if (i === 0) status.id = "active-build-time";
+        else status.textContent = "Ожидает";
+        row.append(name, details, status);
+        return row;
+      }));
+    }
+    const active = queue[0];
+    setText("build-queue-count", queue.length);
+    $("queue-empty").hidden = !!active;
+    $("build-progress").hidden = !active;
+    if (active) {
+      setText("active-build-time", (paused ? "Пауза · " : "Сборка · ") + buildEta(active.remaining));
+      setProgress("build-bar", 1 - active.remaining / BUILD_SECONDS);
+    }
+  }
+
   function updatePanels() {
     const running = simulationRunning();
     const canOrder = ordersAllowed();
+    const paused = phase === "paused";
     const allies = match.allies();
+    const [base, enemy] = match.bases;
+    const { bank, queue } = base;
     const income = match.income();
     for (const [i, id] of RESOURCES.entries()) {
-      setText(id, Math.floor(match.bank[i]));
+      setText(id, Math.floor(bank[i]));
       setText(id + "-rate", "+" + format.format(income[i]) + "/с");
     }
-    const countdown = Math.max(0, match.nextWave - match.time);
-    setText("wave-label", match.wave === 0 ? "Первая волна" : "Волна " + (match.wave + 1));
-    setText("wave-clock", timeText(countdown));
-    $("wave-panel").classList.toggle("imminent", running && countdown < 10);
+    const enemyOrder = enemy.queue[0];
+    setText("enemy-factory-queue", enemyOrder ? "Заказов · " + enemy.queue.length : "Очередь пуста");
+    $("enemy-factory-eta").hidden = !enemyOrder;
+    if (enemyOrder) setText("enemy-factory-eta", (paused ? "Пауза · " : "Сборка · ") + buildEta(enemyOrder.remaining));
     const event = match.news[0];
     setText("event-text", event.message);
     $("event-dot").className = event.tone;
@@ -257,7 +290,6 @@
       ? "Передача сигнала. Удерживайте станции ещё " + Math.max(0, Math.ceil(SECURE_SECONDS - match.secure)) + " с."
       : "Захватите все станции и удержите их 24 секунды или уничтожьте Цитадель дронов.");
     setProgress("secure-bar", match.secure / SECURE_SECONDS);
-    const base = match.bases[0];
     const hull = base.hp / base.hull;
     setProgress("base-bar", hull);
     setText("base-hp", Math.ceil(hull * 100) + "%");
@@ -279,7 +311,6 @@
     $("hold").disabled = !canOrder || !selected.size;
     $("return-base").disabled = !canOrder || !selected.size;
     $("pause").disabled = phase === "briefing" || phase === "ended";
-    const paused = phase === "paused";
     $("pause-status").hidden = !paused;
     setText("pause", paused ? "Продолжить" : "Пауза");
     $("zoom-out").disabled = view.zoom <= 1;
@@ -295,20 +326,20 @@
     for (const [i, id] of buildIds.entries()) {
       setText(id + "-detail", parts[i][design[i]].detail);
       costs[i].textContent = cost[i];
-      costs[i].classList.toggle("insufficient", match.bank[i] < cost[i]);
+      costs[i].classList.toggle("insufficient", bank[i] < cost[i]);
     }
-    const atLimit = allies.length >= MAX_MECHS;
-    setText("factory-state", match.queue ? "Сборка " + Math.ceil(match.queue.remaining) + " с" : allies.length + " / " + MAX_MECHS + " мехов");
-    $("build").disabled = !running || !!match.queue || atLimit || !affordable(match.bank, cost);
-    const freeSockets = match.pads.filter((pad) => !pad.turret || pad.turret.hp <= 0).length;
-    setText("turret", freeSockets ? "Турель «Дозор» · " + TURRET_COST.join(" / ") : "Турели развёрнуты");
+    setText("factory-state", (allies.length + queue.length) + " / " + MAX_MECHS + " мест");
+    $("build").disabled = !canOrder || !match.canBuild(design);
+    updateBuildQueue(queue, paused);
+    const freeSocket = match.freePad();
+    setText("turret", freeSocket ? "Турель «Дозор» · " + TURRET_COST.join(" / ") : "Турели развёрнуты");
     $("turret").title = TURRET_COST.map((value, i) => value + " · " + resourceNames[i]).join(", ");
-    $("turret").disabled = !running || !freeSockets || !affordable(match.bank, TURRET_COST);
+    $("turret").disabled = !running || !freeSocket || !affordable(bank, TURRET_COST);
     canvas.classList.toggle("aiming", canOrder && selected.size > 0);
   }
 
   function buildMech() {
-    if (!simulationRunning() || !match.requestBuild(currentBuild())) return;
+    if (!ordersAllowed() || !match.requestBuild(currentBuild())) return;
     tone(305, .21, .065, 615);
     updatePanels();
   }

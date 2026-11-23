@@ -7,11 +7,11 @@
   <meta name="description" content="Рубеж Эха — браузерная стратегия. Соберите отряд мехов, захватите станции и защитите лагерь.">
   <title>Рубеж Эха</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=3">
-  <script defer src="simulation.js?v=2"></script>
+  <link rel="stylesheet" href="style.css?v=4">
+  <script defer src="simulation.js?v=4"></script>
   <script defer src="mech-art.js?v=2"></script>
-  <script defer src="renderer.js?v=3"></script>
-  <script defer src="app.js?v=3"></script>
+  <script defer src="renderer.js?v=4"></script>
+  <script defer src="app.js?v=4"></script>
 </head>
 <body>
   <header class="command-bar">
@@ -62,10 +62,11 @@
           <span class="sector-cap">Сектор</span>
           <strong>Каньон Вектра</strong>
         </div>
-        <div class="pause-status" id="pause-status" role="status" hidden>Пауза · приказы доступны</div>
-        <div id="wave-panel" class="wave-panel">
-          <span id="wave-label">Первая волна</span>
-          <strong id="wave-clock">00:34</strong>
+        <div class="pause-status" id="pause-status" role="status" hidden>Пауза · приказы и заказы доступны</div>
+        <div class="enemy-factory">
+          <span>Завод Цитадели</span>
+          <strong id="enemy-factory-queue">Очередь пуста</strong>
+          <small id="enemy-factory-eta" hidden></small>
         </div>
       </div>
       <div class="zoom-tools" aria-label="Масштаб карты">
@@ -130,7 +131,7 @@
       <section class="panel factory">
         <div class="panel-heading">
           <h2>Мастерская</h2>
-          <span class="panel-count" id="factory-state">Готова</span>
+          <span class="panel-count" id="factory-state" title="Места в отряде занимают готовые и заказанные мехи">2 / 8 мест</span>
         </div>
         <div class="build-select"><label for="chassis">Шасси</label><select id="chassis" aria-describedby="chassis-detail"></select></div>
         <small class="build-detail" id="chassis-detail"></small>
@@ -142,7 +143,16 @@
           <div class="cost" id="build-cost" aria-label="Стоимость сборки"></div>
           <canvas id="mech-preview" width="216" height="128" role="img" aria-label="Внешний вид собираемого меха"></canvas>
         </div>
-        <button class="primary build-button" type="button" id="build" disabled>Собрать меха <kbd>F</kbd></button>
+        <button class="primary build-button" type="button" id="build" disabled>Заказать меха <kbd>F</kbd></button>
+        <section class="factory-queue" aria-labelledby="queue-heading">
+          <div class="panel-heading">
+            <h3 id="queue-heading">Очередь сборки</h3>
+            <span class="panel-count" id="build-queue-count">0</span>
+          </div>
+          <p id="queue-empty">Заказов нет</p>
+          <div class="progress" id="build-progress" aria-hidden="true" hidden><span id="build-bar"></span></div>
+          <ol class="build-queue" id="build-queue"></ol>
+        </section>
         <button class="secondary turret-button" type="button" id="turret" disabled></button>
       </section>
     </aside>
@@ -158,9 +168,10 @@
         <li>Левый клик по своему меху или его карточке выбирает его. Удерживайте <kbd>Shift</kbd>, чтобы выбрать несколько мехов.</li>
         <li>Правый клик по земле задаёт маршрут, по станции или её карточке отправляет мехов на захват, по дрону или Цитадели отдаёт приказ атаковать. На сенсорном экране используйте касания.</li>
         <li>На паузе можно выбрать мехов и отдать им приказы. Отряд начнёт их выполнять после возобновления миссии.</li>
+        <li>Заказывайте мехов в мастерской даже на паузе. Ресурсы списываются при заказе. Обе стороны собирают по одному меху за 4,2 игровой секунды.</li>
         <li>Станция захватывается, пока ваш мех находится рядом. Присутствие дрона останавливает захват.</li>
         <li>Кнопки скорости меняют темп всей игры. Уровень 1 — 0,5×, уровень 2 — 1×, уровень 3 — 2×. Таймеры показывают игровое время.</li>
-        <li>Клавиши <kbd>1</kbd>–<kbd>8</kbd> выбирают меха, <kbd>G</kbd> выбирает весь отряд, <kbd>F</kbd> запускает сборку, <kbd>Пробел</kbd> ставит игру на паузу.</li>
+        <li>Клавиши <kbd>1</kbd>–<kbd>8</kbd> выбирают меха, <kbd>G</kbd> выбирает весь отряд, <kbd>F</kbd> добавляет заказ в очередь, <kbd>Пробел</kbd> ставит игру на паузу.</li>
       </ul>
     </div>
   </dialog>

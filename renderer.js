@@ -301,7 +301,7 @@ const FrontierView = (() => {
       ctx.translate(p.x, p.y);
       ctx.scale(this.scale, this.scale);
       ctx.setLineDash([3, 4]);
-      ellipse(ctx, 0, 0, 16, 8, "#15273566", "#93d7c188");
+      ellipse(ctx, 0, 0, 16, 8, "#15273566", POLARITY(pad.faction) + "88");
       ctx.restore();
     }
 
@@ -329,14 +329,15 @@ const FrontierView = (() => {
 
     drawTurret(ctx, turret) {
       const p = this.project(turret.x, turret.y);
+      const tint = POLARITY(turret.faction);
       ctx.save();
       ctx.translate(p.x, p.y);
       ctx.scale(this.scale, this.scale);
-      ellipse(ctx, 0, 0, 16, 8, "#104e4566", COLORS.ally + "85");
+      ellipse(ctx, 0, 0, 16, 8, tint + "22", tint + "85");
       box(ctx, 0, 0, 13, 6, 8, "#54798a", "#38535e", "#4b6974");
-      box(ctx, 0, -7, 7, 4, 8, "#87c5b7", "#527574", "#689487");
-      const direction = turret.direction || -.65;
-      line(ctx, [[0, -16], [14 * Math.cos(direction), -16 + 8 * Math.sin(direction)]], COLORS.ally, 3);
+      box(ctx, 0, -7, 7, 4, 8, tint, "#527574", "#689487");
+      const direction = turret.direction ?? (turret.faction === FACTION.ally ? -.65 : 2.49);
+      line(ctx, [[0, -16], [14 * Math.cos(direction), -16 + 8 * Math.sin(direction)]], tint, 3);
       ctx.restore();
     }
 
