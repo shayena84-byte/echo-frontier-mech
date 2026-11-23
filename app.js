@@ -107,13 +107,30 @@
       }
       return false;
     }
+    showOrder(target, kind);
+    return true;
+  }
+
+  function showOrder(target, kind) {
     const destination = kind === "capture" ? target.gate : target;
     view.marker = kind === "hold" ? null : {
       x: destination.x, y: destination.y, time: performance.now() / 1000,
       faction: kind === "attack" ? FACTION.hostile : FACTION.ally,
     };
     tone(kind === "attack" ? 365 : 620, .14, .045, 470);
-    return true;
+  }
+
+  function commandNearest(kind) {
+    if (!ordersAllowed() || !selected.size) return;
+    const capture = kind === "capture";
+    const target = capture ? match.captureNearest([...selected]) : match.attackNearestMech([...selected]);
+    if (target) {
+      showOrder(target, kind);
+      match.log(capture ? "Приказ занять ворота «" + target.name + "»." : "Приказ атаковать · " + target.name + ".");
+    } else if (capture) {
+      match.log("До свободных или вражеских ворот нет маршрута.");
+    }
+    updatePanels();
   }
 
   function start(reset = false) {
@@ -197,6 +214,10 @@
   emptySquad.textContent = "Мастерская может собрать новый мех.";
   $("units").append(emptySquad);
 
+  function equipmentNames(weaponIds, kitId) {
+    return equipmentFor(weaponIds, kitId).map((item) => item.name).join(" · ");
+  }
+
   function renderSquad(allies, active) {
     const living = new Set(allies.map((unit) => unit.id));
     const hadSelection = selected.size > 0;
@@ -213,7 +234,7 @@
       if (!card) {
         card = makeCard("unit");
         card.name.textContent = unit.name;
-        card.button.title = equipmentFor(unit.weaponId, unit.kitId).name;
+        card.button.title = equipmentNames(unit.weaponIds, unit.kitId);
         card.button.addEventListener("click", (event) => selectUnit(unit.id, event.shiftKey));
         unitCards.set(unit.id, card);
         $("units").append(card.button);
@@ -237,22 +258,23 @@
     $("build-cost").append(item);
     return item;
   });
+  const buildSlots = [
+    { id: "chassis", catalog: CHASSIS },
+    { id: "weapon-1", catalog: WEAPONS },
+    { id: "weapon-2", catalog: WEAPONS },
+    { id: "module", catalog: KIT },
+  ];
   function currentBuild() {
-    const item = Number($("equipment").value);
-    const armed = item < WEAPONS.length;
-    return [Number($("chassis").value), armed ? item : null, armed ? null : item - WEAPONS.length];
+    return buildSlots.map(({ id }) => {
+      const { value } = $(id);
+      return value === "" ? null : Number(value);
+    });
   }
-
-  for (const [index, chassis] of CHASSIS.entries()) {
-    $("chassis").append(new Option(chassis.name, index));
-  }
-  for (const [index, item] of [...WEAPONS, ...KIT].entries()) {
-    $(index < WEAPONS.length ? "weapon-options" : "module-options").append(new Option(item.name, index));
-  }
-  $("chassis").value = DEFAULT_BUILD[0];
-  $("equipment").value = DEFAULT_BUILD[1] ?? WEAPONS.length + DEFAULT_BUILD[2];
-  for (const id of ["chassis", "equipment"]) {
-    $(id).addEventListener("change", updatePanels);
+  for (const [slot, { id, catalog }] of buildSlots.entries()) {
+    const field = $(id);
+    for (const [index, part] of catalog.entries()) field.append(new Option(part.name, index));
+    field.value = DEFAULT_BUILD[slot] ?? "";
+    field.addEventListener("change", updatePanels);
   }
   setText("mission-detail", "Удерживайте ворота Цитадели одним мехом " + BASE_CAPTURE_SECONDS + " игровых секунд. Станции дают ресурсы.");
 
@@ -265,7 +287,7 @@
         const details = document.createElement("small");
         const status = document.createElement("span");
         name.textContent = CHASSIS[build[0]].name;
-        details.textContent = equipmentFor(build[1], build[2]).name;
+        details.textContent = equipmentNames(build.slice(1, 3), build[3]);
         status.className = "build-job-status";
         if (i === 0) status.id = "active-build-time";
         else status.textContent = "Ожидает";
@@ -336,9 +358,15 @@
       showGateProgress(button, node.gate);
     }
 
+    const canCommand = canOrder && selected.size > 0;
+    const hasArmed = allies.some((unit) => selected.has(unit.id) && unit.range > 0);
+    const hasTarget = match.mechs(FACTION.hostile).length > 0;
     $("select-all").disabled = !canOrder || !allies.length;
-    $("hold").disabled = !canOrder || !selected.size;
-    $("return-base").disabled = !canOrder || !selected.size;
+    $("capture-nearest").disabled = !canCommand;
+    $("attack-mech").disabled = !canCommand || !hasArmed || !hasTarget;
+    $("attack-mech").title = !hasArmed ? "Выберите меха с оружием" : !hasTarget ? "На поле нет вражеских мехов" : "Преследовать ближайшего вражеского меха";
+    $("hold").disabled = !canCommand;
+    $("return-base").disabled = !canCommand;
     $("pause").disabled = phase === "briefing" || phase === "ended";
     $("pause-status").hidden = !paused;
     setText("pause", paused ? "Продолжить" : "Пауза");
@@ -352,11 +380,16 @@
       lastPreview = preview;
     }
     const cost = buildCost(design);
-    setText("chassis-detail", CHASSIS[design[0]].detail);
-    setText("equipment-detail", equipmentFor(design[1], design[2]).detail);
-    for (const [i, price] of cost.entries()) {
-      costs[i].textContent = price;
-      costs[i].classList.toggle("insufficient", bank[i] < price);
+    for (const [slot, { id, catalog }] of buildSlots.entries()) {
+      const detailId = id + "-detail";
+      const detail = catalog[design[slot]]?.detail;
+      $(detailId).hidden = !detail;
+      setText(detailId, detail ?? "");
+    }
+    $("build-requirement").hidden = !!cost;
+    for (const [i, item] of costs.entries()) {
+      item.textContent = cost ? cost[i] : "—";
+      item.classList.toggle("insufficient", !!cost && bank[i] < cost[i]);
     }
     setText("factory-state", (allies.length + queue.length) + " / " + MAX_MECHS + " мест");
     $("build").disabled = !canOrder || !match.canBuild(design);
@@ -384,6 +417,8 @@
     });
   }
   $("select-all").addEventListener("click", selectAll);
+  $("capture-nearest").addEventListener("click", () => commandNearest("capture"));
+  $("attack-mech").addEventListener("click", () => commandNearest("attack"));
   $("hold").addEventListener("click", () => command({}, "hold"));
   $("return-base").addEventListener("click", () => command({ x: 4, y: 13 }));
   $("build").addEventListener("click", buildMech);

@@ -122,9 +122,9 @@ const MechArt = (() => {
     }
   }
 
-  function mount(profile, chassisId, weaponId, deck) {
+  function mount(profile, chassisId, weaponId, deck, slot) {
     const weapon = WEAPON_SHAPES[weaponId];
-    const side = profile.width * (chassisId === 2 ? .35 : .51);
+    const side = profile.width * (chassisId === 2 ? .44 : .57) * (slot === 0 ? 1 : -1);
     return { side, height: deck + profile.height * .61 + weapon.lift, ...weapon };
   }
 
@@ -172,7 +172,7 @@ const MechArt = (() => {
     }
   }
 
-  function buildMesh(chassisId, weaponId, kitId, stride) {
+  function buildMesh(chassisId, weaponIds, kitId, stride) {
     const mesh = [];
     const profile = PROFILES[chassisId];
     const heavy = chassisId === 1;
@@ -196,7 +196,9 @@ const MechArt = (() => {
     for (let i = 0; i < 3; i++) armor(mesh, -5.8 + 1.55 * i, 1.15, top - .23, .65, 3.4, .95, "inset");
 
     if (kitId !== null) equipment(mesh, kitId, profile, deck);
-    if (weaponId !== null) armament(mesh, mount(profile, chassisId, weaponId, deck), weaponId);
+    for (const [slot, id] of weaponIds.entries()) {
+      if (id !== null) armament(mesh, mount(profile, chassisId, id, deck, slot), id);
+    }
     return mesh;
   }
 
@@ -246,10 +248,10 @@ const MechArt = (() => {
   }
 
   function sprite(unit, still) {
-    const { chassisId, weaponId, kitId, faction, direction } = unit;
+    const { chassisId, weaponIds, kitId, faction, direction } = unit;
     const heading = angleIndex(direction);
     const gait = gaitIndex(unit, still);
-    const key = [faction, chassisId, weaponId, kitId, heading, gait].join("/");
+    const key = [faction, chassisId, ...weaponIds, kitId, heading, gait].join("/");
     if (sprites.has(key)) {
       const cached = sprites.get(key);
       sprites.delete(key);
@@ -257,7 +259,7 @@ const MechArt = (() => {
       return cached;
     }
     const palette = faction < 0 ? PALETTES.hostile : PALETTES.ally;
-    const faces = visibleFaces(buildMesh(chassisId, weaponId, kitId, gait), heading * TAU / ANGLES, palette);
+    const faces = visibleFaces(buildMesh(chassisId, weaponIds, kitId, gait), heading * TAU / ANGLES, palette);
     const canvas = document.createElement("canvas");
     canvas.width = SPRITE_WIDTH * DENSITY;
     canvas.height = SPRITE_HEIGHT * DENSITY;
@@ -286,16 +288,15 @@ const MechArt = (() => {
   }
 
   function muzzle(unit, still) {
-    const { chassisId, weaponId, direction } = unit;
-    if (weaponId === null) return [0, 0];
+    const { chassisId, weaponId, slot, direction } = unit;
     const profile = PROFILES[chassisId];
     const gait = gaitIndex(unit, still);
     const bob = chassisId !== 2 && gait > 0 ? -.85 * (1 + Math.cos((gait - 1) * TAU * 2 / WALK_FRAMES)) : 0;
-    const gun = mount(profile, chassisId, weaponId, profile.deck + bob);
+    const gun = mount(profile, chassisId, weaponId, profile.deck + bob, slot);
     return screen(camera(angleIndex(direction) * TAU / ANGLES)([gun.front, gun.side, gun.height]));
   }
 
-  function preview(canvas, chassisId, weaponId, kitId) {
+  function preview(canvas, chassisId, firstWeapon, secondWeapon, kitId) {
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.beginPath();
@@ -304,7 +305,8 @@ const MechArt = (() => {
     ctx.fill();
     ctx.strokeStyle = "#639c9a45";
     ctx.stroke();
-    draw(ctx, { faction: 1, chassisId, weaponId, kitId, direction: .2 }, canvas.width * .47, 98, 2.50, true);
+    draw(ctx, { faction: 1, chassisId, weaponIds: [firstWeapon, secondWeapon], kitId, direction: .2 },
+      canvas.width * .47, 98, 2.50, true);
   }
 
   return { draw, muzzle, preview, profile: (id) => PROFILES[id] };

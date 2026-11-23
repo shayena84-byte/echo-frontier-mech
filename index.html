@@ -7,11 +7,11 @@
   <meta name="description" content="Рубеж Эха — браузерная стратегия. Соберите отряд мехов, захватите станции и защитите лагерь.">
   <title>Рубеж Эха</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=5">
-  <script defer src="simulation.js?v=5"></script>
-  <script defer src="mech-art.js?v=5"></script>
-  <script defer src="renderer.js?v=5"></script>
-  <script defer src="app.js?v=5"></script>
+  <link rel="stylesheet" href="style.css?v=6">
+  <script defer src="simulation.js?v=6"></script>
+  <script defer src="mech-art.js?v=6"></script>
+  <script defer src="renderer.js?v=6"></script>
+  <script defer src="app.js?v=6"></script>
 </head>
 <body>
   <header class="command-bar">
@@ -125,7 +125,9 @@
           <button class="text-button" type="button" id="select-all" disabled>Выбрать всех <kbd>G</kbd></button>
         </div>
         <div class="unit-list" id="units"></div>
-        <div class="orders">
+        <div class="orders" role="group" aria-label="Приказы выбранным мехам">
+          <button class="secondary tactical-order" type="button" id="capture-nearest" disabled>Захватить ближайшую точку</button>
+          <button class="secondary tactical-order" type="button" id="attack-mech" disabled>Атаковать меха противника</button>
           <button class="secondary" type="button" id="hold" disabled>Удерживать</button>
           <button class="secondary" type="button" id="return-base" disabled>На ремонт</button>
         </div>
@@ -139,13 +141,21 @@
         <div class="build-select"><label for="chassis">Шасси</label><select id="chassis" aria-describedby="chassis-detail"></select></div>
         <small class="build-detail" id="chassis-detail"></small>
         <div class="build-select">
-          <label for="equipment">Оснащение</label>
-          <select id="equipment" aria-describedby="equipment-detail">
-            <optgroup id="weapon-options" label="Оружие"></optgroup>
-            <optgroup id="module-options" label="Модули"></optgroup>
-          </select>
+          <label for="weapon-1">Оружие 1</label>
+          <select id="weapon-1" aria-describedby="weapon-1-detail"><option value="">Без оружия</option></select>
         </div>
-        <small class="build-detail" id="equipment-detail"></small>
+        <small class="build-detail" id="weapon-1-detail"></small>
+        <div class="build-select">
+          <label for="weapon-2">Оружие 2</label>
+          <select id="weapon-2" aria-describedby="weapon-2-detail"><option value="">Без оружия</option></select>
+        </div>
+        <small class="build-detail" id="weapon-2-detail" hidden></small>
+        <div class="build-select">
+          <label for="module">Модуль</label>
+          <select id="module" aria-describedby="module-detail"><option value="">Без модуля</option></select>
+        </div>
+        <small class="build-detail" id="module-detail" hidden></small>
+        <p class="build-requirement" id="build-requirement" hidden>Добавьте хотя бы одно оружие или модуль.</p>
         <div class="assembly-overview">
           <div class="cost" id="build-cost" aria-label="Стоимость сборки"></div>
           <canvas id="mech-preview" width="216" height="128" role="img" aria-label="Внешний вид собираемого меха"></canvas>
@@ -174,11 +184,12 @@
       <ul>
         <li>Левый клик по своему меху или его карточке выбирает его. Удерживайте <kbd>Shift</kbd>, чтобы выбрать несколько мехов.</li>
         <li>Правый клик по земле задаёт маршрут, по воротам или карточке отправляет меха на захват, по дрону или зданию Цитадели отдаёт приказ атаковать. На сенсорном экране используйте касания.</li>
+        <li>Кнопка «Захватить ближайшую точку» выбирает свободные или вражеские ворота по длине маршрута. Кнопка «Атаковать меха противника» направляет вооружённых мехов за ближайшим вражеским мехом.</li>
         <li>При групповом приказе один мех занимает ворота, остальные прикрывают его. Если он уйдёт или будет уничтожен, захват начнётся заново. Противник в воротах приостанавливает захват.</li>
         <li>Для победы удержите ворота Цитадели. Обстрел базы выводит из строя оборону и завод. Дроны могут захватить лагерь по тем же правилам.</li>
         <li>На паузе можно выбрать мехов и отдать им приказы. Отряд начнёт их выполнять после возобновления миссии.</li>
         <li>Заказывайте мехов в мастерской даже на паузе. Ресурсы списываются при заказе. Обе стороны собирают по одному меху за 4,2 игровой секунды.</li>
-        <li>Меху нужны шасси и одно оснащение. Оружие позволяет стрелять, модуль ускоряет захват, усиливает броню или ремонтирует меха.</li>
+        <li>Мех вмещает два оружия и один модуль. Для сборки нужны шасси и хотя бы один предмет оснащения. Каждое оружие стреляет со своей дальностью и перезарядкой.</li>
         <li>Кнопки скорости меняют темп всей игры. Уровень 1 — 0,5×, уровень 2 — 1×, уровень 3 — 2×. Таймеры показывают игровое время.</li>
         <li>Клавиши <kbd>1</kbd>–<kbd>8</kbd> выбирают меха, <kbd>G</kbd> выбирает весь отряд, <kbd>F</kbd> добавляет заказ в очередь, <kbd>Пробел</kbd> ставит игру на паузу.</li>
       </ul>

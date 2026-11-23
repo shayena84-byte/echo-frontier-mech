@@ -293,8 +293,10 @@ kbd {
 }
 .unit-list { display: grid; gap: 4px; margin: 6px 0 7px; max-height: 163px; overflow: auto; scrollbar-width: thin; }
 .unit.selected { border-color: #58ad9b; background: #213e41; }
-.orders { display: flex; gap: 6px; }
-.orders .secondary { flex: 1; min-height: 30px; font-size: 12px; }
+.orders { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.orders .secondary { min-height: 30px; font-size: 12px; }
+.orders .tactical-order { min-height: 40px; padding-inline: 6px; color: #b5f1de; }
+#attack-mech { color: #ffc2ab; }
 .empty-squad { display: block; color: var(--muted); margin: 3px 0; font-size: 13px; }
 
 .build-select { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 7px; font-size: 13px; }
@@ -311,6 +313,7 @@ kbd {
   cursor: pointer;
 }
 .build-detail { color: #a2b8c9; min-height: 15px; display: block; margin: 2px 0 0 84px; font-size: 12px; }
+.build-requirement { color: #d9bf92; margin: 7px 0 0; font-size: 12px; }
 .assembly-overview {
   display: flex;
   align-items: center;

@@ -40,9 +40,11 @@ const EchoSim = (() => {
   const PAD_OFFSETS = [[2, -1], [2, 2]];
   const RELEASE_OFFSETS = [[1, 0], [1, 1], [1, -1], [0, -1], [0, 1], [1, -2], [1, 2], [0, -2], [0, 2], [-1, 0]];
   const TURRET_COST = [82, 41, 6];
-  const DEFAULT_BUILD = [0, 0, null];
-  const STARTING_BUILDS = [[0, null, 0], [1, 0, null]];
-  const ENEMY_BUILDS = [DEFAULT_BUILD, [0, 1, null], [1, 0, null], [1, 2, null], [2, 1, null], [0, null, 0]];
+  const DEFAULT_BUILD = [0, 0, null, null];
+  const STARTING_BUILDS = [[0, null, null, 0], [1, 0, null, null]];
+  const ENEMY_BUILDS = [
+    DEFAULT_BUILD, [0, 1, null, null], [1, 0, null, null], [1, 2, null, null], [2, 1, 0, 1], [0, null, null, 0],
+  ];
   const NEIGHBORS = [
     [1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1],
     [1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2],
@@ -98,15 +100,25 @@ const EchoSim = (() => {
     return cost.every((value, index) => bank[index] >= value);
   }
 
-  function equipmentFor(weapon, kit) {
-    return weapon === null ? KIT[kit] : WEAPONS[weapon];
+  function equipmentFor(weaponIds, kitId) {
+    return [...weaponIds.map((id) => WEAPONS[id]), KIT[kitId]].filter(Boolean);
   }
 
-  function buildCost([chassis, weapon, kit]) {
-    const frame = CHASSIS[chassis];
-    const equipment = equipmentFor(weapon, kit);
-    if (!frame || !equipment || (weapon !== null && kit !== null)) return null;
-    return frame.cost.map((price, i) => price + equipment.cost[i]);
+  function normalizeBuild(build) {
+    return Array.isArray(build) && build.length === 3 ? [build[0], build[1], null, build[2]] : build;
+  }
+
+  const validSlot = (id, catalog) => id === null || (Number.isInteger(id) && !!catalog[id]);
+
+  function buildCost(build) {
+    const design = normalizeBuild(build);
+    if (!Array.isArray(design) || design.length !== 4) return null;
+    const [chassis, firstWeapon, secondWeapon, kit] = design;
+    if (chassis === null || !validSlot(chassis, CHASSIS) || !validSlot(firstWeapon, WEAPONS) ||
+        !validSlot(secondWeapon, WEAPONS) || !validSlot(kit, KIT)) return null;
+    const equipment = equipmentFor([firstWeapon, secondWeapon], kit);
+    if (!equipment.length) return null;
+    return CHASSIS[chassis].cost.map((price, i) => equipment.reduce((sum, part) => sum + part.cost[i], price));
   }
 
   function nearestWalkable(terrain, target) {
@@ -235,20 +247,21 @@ const EchoSim = (() => {
     }
 
     spawn(faction, x, y, build) {
-      const [chassisId, weaponId, kitId] = build;
+      const [chassisId, firstWeapon, secondWeapon, kitId] = normalizeBuild(build);
       const chassis = CHASSIS[chassisId];
-      const weapon = WEAPONS[weaponId];
+      const weaponIds = [firstWeapon, secondWeapon];
+      const weapons = weaponIds.map((id) => WEAPONS[id]).filter(Boolean);
       const kit = KIT[kitId];
       const hull = chassis.hull + (kit?.hull ?? 0);
       const spot = nearestWalkable(this.terrain, { x, y });
       const ally = faction === FACTION.ally;
       const mech = {
-        ...spot, id: "mech-" + (++this.sequence), faction, type: "mech", chassisId, weaponId, kitId,
+        ...spot, id: "mech-" + (++this.sequence), faction, type: "mech", chassisId, weaponIds, kitId,
         name: ally ? chassis.name + " / " + String(++this.allySequence).padStart(2, "0") : "Дрон " + chassis.name,
-        speed: chassis.speed, hull, hp: hull, range: weapon?.range ?? 0,
-        damage: weapon?.damage ?? 0, cycle: weapon?.cycle ?? 0, color: weapon?.color,
+        speed: chassis.speed, hull, hp: hull,
+        range: weapons.length ? Math.min(...weapons.map((weapon) => weapon.range)) : 0,
         capture: kit?.capture ?? 1, repair: kit?.repair ?? 0,
-        direction: ally ? -0.7 : 2.45, order: { kind: "hold" }, path: [], cooldown: 0,
+        direction: ally ? -0.7 : 2.45, order: { kind: "hold" }, path: [], weaponCooldowns: [0, 0],
         hitAge: 100, replan: 0, moving: false, foot: 0,
       };
       this.units.push(mech);
@@ -256,16 +269,10 @@ const EchoSim = (() => {
     }
 
     setOrder(ids, target, kind = "move") {
-      const active = this.allies().filter((unit) => ids.includes(unit.id) && (kind !== "attack" || unit.damage > 0));
+      const active = this.allies().filter((unit) => ids.includes(unit.id) && (kind !== "attack" || unit.range > 0));
       if (kind === "capture" && active.length) {
         const lead = active.reduce((best, unit) => distance(unit, target.gate) < distance(best, target.gate) ? unit : best);
-        this.orderCapture(lead, target);
-        const positions = this.coverPositions(target);
-        for (const unit of active) {
-          if (unit === lead) continue;
-          const position = positions.shift();
-          this.giveOrder(unit, position ? { kind: "move", ...position } : { kind: "hold" });
-        }
+        this.orderGroupCapture(active, lead, target);
         return active.length;
       }
       for (const [index, unit] of active.entries()) {
@@ -277,6 +284,49 @@ const EchoSim = (() => {
         else this.giveOrder(unit, { kind, ...nearestWalkable(this.terrain, goal) });
       }
       return active.length;
+    }
+
+    captureNearest(ids) {
+      const group = this.allies().filter((unit) => ids.includes(unit.id));
+      let closest = null;
+      for (const site of this.sites) {
+        if (site.faction === FACTION.ally) continue;
+        for (const unit of group) {
+          const path = findPath(this.terrain, unit, site.gate);
+          if (!path.length) continue;
+          const length = path.reduce((sum, point, i) => sum + distance(i ? path[i - 1] : unit, point), 0);
+          if (!closest || length < closest.length) closest = { site, unit, length };
+        }
+      }
+      if (!closest) return null;
+      this.orderGroupCapture(group, closest.unit, closest.site);
+      return closest.site;
+    }
+
+    attackNearestMech(ids) {
+      const attackers = this.allies().filter((unit) => ids.includes(unit.id) && unit.range > 0);
+      if (!attackers.length) return null;
+      let closest = null;
+      let bestDistance = Infinity;
+      for (const target of this.mechs(FACTION.hostile)) {
+        const range = Math.min(...attackers.map((unit) => distance(unit, target)));
+        if (range >= bestDistance) continue;
+        closest = target;
+        bestDistance = range;
+      }
+      if (!closest) return null;
+      for (const unit of attackers) this.giveOrder(unit, { kind: "attack", target: closest.id, focus: true });
+      return closest;
+    }
+
+    orderGroupCapture(group, lead, site) {
+      this.orderCapture(lead, site);
+      const positions = this.coverPositions(site);
+      for (const unit of group) {
+        if (unit === lead) continue;
+        const position = positions.shift();
+        this.giveOrder(unit, position ? { kind: "move", ...position } : { kind: "hold" });
+      }
     }
 
     giveOrder(unit, order) {
@@ -308,7 +358,7 @@ const EchoSim = (() => {
       if (!this.canBuild(build, faction)) return false;
       const base = this.baseFor(faction);
       this.spend(base, buildCost(build));
-      base.queue.push({ build: build.slice(), remaining: BUILD_SECONDS });
+      base.queue.push({ build: normalizeBuild(build).slice(), remaining: BUILD_SECONDS });
       if (faction === FACTION.ally) this.log("Мех «" + CHASSIS[build[0]].name + "» добавлен в очередь.", "ally");
       return true;
     }
@@ -376,7 +426,7 @@ const EchoSim = (() => {
       for (const site of goals) {
         if (!available.length) break;
         const assigned = available.find((unit) => unit.order.kind === "capture" && unit.order.target === site.id);
-        const score = (unit) => distance(unit, site.gate) / unit.speed + (unit.damage > 0 ? 2 : 0);
+        const score = (unit) => distance(unit, site.gate) / unit.speed + (unit.range > 0 ? 2 : 0);
         const capturer = assigned ?? available.reduce((best, unit) => score(unit) < score(best) ? unit : best);
         this.orderCapture(capturer, site);
         available.splice(available.indexOf(capturer), 1);
@@ -385,7 +435,7 @@ const EchoSim = (() => {
       const mainGoal = goals[0];
       const cover = this.coverPositions(mainGoal);
       for (const unit of available) {
-        if (!unit.damage) {
+        if (!unit.range) {
           if (unit.order.kind !== "hold") this.giveOrder(unit, { kind: "hold" });
           continue;
         }
@@ -408,19 +458,23 @@ const EchoSim = (() => {
       }
     }
 
-    fire(shooter, target) {
-      if (shooter.damage <= 0 || target.hp <= 0) return;
-      shooter.cooldown = shooter.cycle;
+    fire(shooter, target, slot) {
+      const isMech = shooter.type === "mech";
+      if (isMech && slot === undefined) slot = shooter.weaponIds.findIndex((id) => id !== null);
+      const weapon = isMech ? WEAPONS[shooter.weaponIds[slot]] : shooter;
+      if (!weapon || weapon.damage <= 0 || target.hp <= 0) return;
+      if (isMech) shooter.weaponCooldowns[slot] = weapon.cycle;
+      else shooter.cooldown = shooter.cycle;
       shooter.direction = Math.atan2(target.y - shooter.y, target.x - shooter.x);
-      target.hp = Math.max(0, target.hp - shooter.damage);
+      target.hp = Math.max(0, target.hp - weapon.damage);
       target.hitAge = 0;
       this.effects.push({
         type: "shot", x: shooter.x, y: shooter.y, tx: target.x, ty: target.y, life: 0.19, max: 0.19,
-        faction: shooter.faction, color: shooter.faction === FACTION.ally ? shooter.color || "#69f1c1" : "#ff826d",
+        faction: shooter.faction, color: shooter.faction === FACTION.ally ? weapon.color || "#69f1c1" : "#ff826d",
         high: shooter.type === "base" ? 24 : shooter.type === "turret" ? 14 : 11,
         targetHigh: target.type === "base" ? 18 : target.type === "turret" ? 11 : 7,
-        mech: shooter.type === "mech" ? {
-          chassisId: shooter.chassisId, weaponId: shooter.weaponId, direction: shooter.direction,
+        mech: isMech ? {
+          chassisId: shooter.chassisId, weaponId: shooter.weaponIds[slot], slot, direction: shooter.direction,
           moving: shooter.moving, foot: shooter.foot,
         } : null,
         targetChassis: target.chassisId,
@@ -447,7 +501,6 @@ const EchoSim = (() => {
     }
 
     updateUnit(unit, entities, dt) {
-      unit.cooldown = Math.max(0, unit.cooldown - dt);
       unit.hitAge += dt;
       unit.replan -= dt;
       unit.moving = false;
@@ -457,18 +510,31 @@ const EchoSim = (() => {
         orderedTarget = entities.find((target) => target.id === unit.order.target && target.hp > 0);
         if (!orderedTarget) this.giveOrder(unit, { kind: "hold" });
       }
-      const inRange = (target) => distance(unit, target) <= unit.range + (target.type === "base" ? 0.5 : 0);
-      const orderedInRange = orderedTarget && inRange(orderedTarget);
-      if (orderedTarget && !orderedInRange && unit.replan <= 0) {
-        unit.path = findPath(this.terrain, unit, orderedTarget);
-        unit.replan = 0.55;
+      const inRange = (target, range) => distance(unit, target) <= range + (target.type === "base" ? 0.5 : 0);
+      if (orderedTarget && inRange(orderedTarget, unit.range)) {
+        unit.path.length = 0;
+      } else {
+        if (orderedTarget && unit.replan <= 0) {
+          unit.path = findPath(this.terrain, unit, orderedTarget);
+          unit.replan = 0.55;
+        }
+        this.advance(unit, dt);
       }
-      if (!orderedInRange) this.advance(unit, dt);
-      const target = unit.damage <= 0 ? null : orderedInRange ? orderedTarget : entities.reduce((best, other) => {
-        if (other.hp <= 0 || unit.faction === other.faction || !inRange(other)) return best;
-        return !best || distance(unit, other) < distance(unit, best) ? other : best;
-      }, null);
-      if (target && unit.cooldown <= 0) this.fire(unit, target);
+      for (const [slot, id] of unit.weaponIds.entries()) {
+        const weapon = WEAPONS[id];
+        if (!weapon) continue;
+        unit.weaponCooldowns[slot] = Math.max(0, unit.weaponCooldowns[slot] - dt);
+        if (unit.weaponCooldowns[slot] > 1e-9) continue;
+        if (orderedTarget?.hp > 0 && inRange(orderedTarget, weapon.range)) {
+          this.fire(unit, orderedTarget, slot);
+        } else if (!unit.order.focus) {
+          const target = entities.reduce((best, other) => {
+            if (other.hp <= 0 || unit.faction === other.faction || !inRange(other, weapon.range)) return best;
+            return !best || distance(unit, other) < distance(unit, best) ? other : best;
+          }, null);
+          if (target) this.fire(unit, target, slot);
+        }
+      }
       const base = this.baseFor(unit.faction);
       const baseRepair = base.hp > 0 && distance(unit, base) <= 2.08 ? 11 : 0;
       if (unit.hitAge > 3.0) unit.hp = Math.min(unit.hull, unit.hp + (unit.repair + baseRepair) * dt);
