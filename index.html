@@ -7,11 +7,11 @@
   <meta name="description" content="Рубеж Эха — браузерная стратегия. Соберите отряд мехов, захватите станции и защитите лагерь.">
   <title>Рубеж Эха</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=2">
+  <link rel="stylesheet" href="style.css?v=3">
   <script defer src="simulation.js?v=2"></script>
   <script defer src="mech-art.js?v=2"></script>
-  <script defer src="renderer.js?v=2"></script>
-  <script defer src="app.js?v=2"></script>
+  <script defer src="renderer.js?v=3"></script>
+  <script defer src="app.js?v=3"></script>
 </head>
 <body>
   <header class="command-bar">
@@ -56,12 +56,13 @@
 
   <main class="layout">
     <section class="battlefield" id="battlefield" aria-label="Поле боя">
-      <canvas id="terrain" aria-label="Карта каньона. Выберите меха и укажите цель." tabindex="0"></canvas>
+      <canvas id="terrain" aria-label="Карта каньона. Левая кнопка выбирает меха, правая задаёт цель." tabindex="0"></canvas>
       <div class="field-header">
         <div class="sector">
           <span class="sector-cap">Сектор</span>
           <strong>Каньон Вектра</strong>
         </div>
+        <div class="pause-status" id="pause-status" role="status" hidden>Пауза · приказы доступны</div>
         <div id="wave-panel" class="wave-panel">
           <span id="wave-label">Первая волна</span>
           <strong id="wave-clock">00:34</strong>
@@ -84,13 +85,6 @@
           <h2>Верните связь<br>с орбитой.</h2>
           <p>После аварийной посадки ваш отряд обнаружил три станции. Подключите их к лагерю, пока дроны не захватили каньон.</p>
           <button class="primary" type="button" id="launch">Начать операцию</button>
-        </div>
-      </div>
-      <div class="screen" id="pause-screen" hidden>
-        <div class="screen-card compact">
-          <h2>Пауза</h2>
-          <p>Приказы отряда и таймер наступления приостановлены.</p>
-          <button class="primary" type="button" id="resume">Продолжить</button>
         </div>
       </div>
       <div class="screen" id="end-screen" hidden>
@@ -161,9 +155,9 @@
         <button class="utility help-button" type="button" id="close-help" aria-label="Закрыть справку">×</button>
       </div>
       <ul>
-        <li>Нажмите на своего меха или его карточку, чтобы выбрать его.</li>
-        <li>Щёлкните по земле или станции, чтобы отправить выбранный отряд. На сенсорном экране используйте касания.</li>
-        <li>Щёлкните по дрону или красной базе для прицельной атаки. Мехи также стреляют автоматически по целям в радиусе своего оружия.</li>
+        <li>Левый клик по своему меху или его карточке выбирает его. Удерживайте <kbd>Shift</kbd>, чтобы выбрать несколько мехов.</li>
+        <li>Правый клик по земле задаёт маршрут, по станции или её карточке отправляет мехов на захват, по дрону или Цитадели отдаёт приказ атаковать. На сенсорном экране используйте касания.</li>
+        <li>На паузе можно выбрать мехов и отдать им приказы. Отряд начнёт их выполнять после возобновления миссии.</li>
         <li>Станция захватывается, пока ваш мех находится рядом. Присутствие дрона останавливает захват.</li>
         <li>Кнопки скорости меняют темп всей игры. Уровень 1 — 0,5×, уровень 2 — 1×, уровень 3 — 2×. Таймеры показывают игровое время.</li>
         <li>Клавиши <kbd>1</kbd>–<kbd>8</kbd> выбирают меха, <kbd>G</kbd> выбирает весь отряд, <kbd>F</kbd> запускает сборку, <kbd>Пробел</kbd> ставит игру на паузу.</li>

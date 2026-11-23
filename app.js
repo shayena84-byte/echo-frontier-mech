@@ -16,6 +16,8 @@
   const parts = [CHASSIS, WEAPONS, KIT];
   const format = new Intl.NumberFormat("ru", { maximumFractionDigits: 1 });
   const unitCards = new Map();
+  const isFriendlyMech = (entity) => entity.type === "mech" && entity.faction === FACTION.ally;
+  const isOrderTarget = (entity) => !entity.type || entity.faction === FACTION.hostile;
   let match = new Match();
   let selected = new Set([match.allies()[0].id]);
   let phase = "briefing";
@@ -27,6 +29,7 @@
   let stepBank = 0;
   let speed = speeds[1];
   let lastPreview = "";
+  let pointerType = "";
 
   const timeText = (seconds) => {
     const rounded = Math.max(0, Math.ceil(seconds));
@@ -42,8 +45,25 @@
     $(id).style.width = clamp(value * 100, 0, 100) + "%";
   }
 
-  function playable() {
+  function simulationRunning() {
     return phase === "running" && !manual.open;
+  }
+
+  function ordersAllowed() {
+    return (phase === "running" || phase === "paused") && !manual.open;
+  }
+
+  function touchClick(event) {
+    const type = event.pointerType || pointerType;
+    return type === "touch" || type === "pen" || event.sourceCapabilities?.firesTouchEvents === true;
+  }
+
+  function onRightClick(element, action) {
+    element.addEventListener("contextmenu", (event) => {
+      if (!ordersAllowed()) return;
+      event.preventDefault();
+      if (event.button === 2 || (event.button === 0 && event.ctrlKey)) action(event);
+    });
   }
 
   function tone(frequency, duration = 0.12, level = 0.055, ending = frequency) {
@@ -71,18 +91,18 @@
   }
 
   function selectAll() {
-    if (!playable()) return;
+    if (!ordersAllowed()) return;
     selected = new Set(match.allies().map((unit) => unit.id));
     tone(540);
     updatePanels();
   }
 
   function command(target, kind = "move") {
-    if (!playable() || !match.setOrder([...selected], target, kind)) return false;
-    if (kind !== "hold") {
-      view.marker = { x: target.x, y: target.y, time: performance.now() / 1000,
-        faction: kind === "attack" ? FACTION.hostile : FACTION.ally };
-    }
+    if (!ordersAllowed() || !match.setOrder([...selected], target, kind)) return false;
+    view.marker = kind === "hold" ? null : {
+      x: target.x, y: target.y, time: performance.now() / 1000,
+      faction: kind === "attack" ? FACTION.hostile : FACTION.ally,
+    };
     tone(kind === "attack" ? 365 : 620, .14, .045, 470);
     return true;
   }
@@ -101,7 +121,6 @@
     stepBank = 0;
     $("intro").hidden = true;
     $("end-screen").hidden = true;
-    $("pause-screen").hidden = true;
     canvas.focus({ preventScroll: true });
     tone(445, .25, .055, 735);
     updatePanels();
@@ -110,9 +129,8 @@
   function togglePause() {
     if (phase !== "running" && phase !== "paused") return;
     phase = phase === "paused" ? "running" : "paused";
-    $("pause-screen").hidden = phase !== "paused";
-    if (phase === "paused") $("resume").focus({ preventScroll: true });
-    else canvas.focus({ preventScroll: true });
+    lastFrame = performance.now() / 1000;
+    canvas.focus({ preventScroll: true });
     updatePanels();
   }
 
@@ -147,10 +165,14 @@
     const card = makeCard("station");
     card.name.textContent = node.name;
     card.call.textContent = node.call;
-    card.button.title = "Послать выбранных мехов · " + resourceNames[node.resource] + " +" + format.format(node.income) + "/с";
-    card.button.addEventListener("click", () => {
+    card.button.title = "Правый клик · отправить выбранных мехов · " + resourceNames[node.resource] + " +" + format.format(node.income) + "/с";
+    const sendToStation = () => {
       const target = match.nodes[index];
       if (command(target) && view.zoom > 1) view.zoomTo(view.zoom, target);
+    };
+    onRightClick(card.button, sendToStation);
+    card.button.addEventListener("click", (event) => {
+      if (event.detail === 0 || touchClick(event)) sendToStation();
     });
     $("stations").append(card.button);
     return card;
@@ -213,7 +235,8 @@
   }
 
   function updatePanels() {
-    const active = playable();
+    const running = simulationRunning();
+    const canOrder = ordersAllowed();
     const allies = match.allies();
     const income = match.income();
     for (const [i, id] of RESOURCES.entries()) {
@@ -223,7 +246,7 @@
     const countdown = Math.max(0, match.nextWave - match.time);
     setText("wave-label", match.wave === 0 ? "Первая волна" : "Волна " + (match.wave + 1));
     setText("wave-clock", timeText(countdown));
-    $("wave-panel").classList.toggle("imminent", active && countdown < 10);
+    $("wave-panel").classList.toggle("imminent", running && countdown < 10);
     const event = match.news[0];
     setText("event-text", event.message);
     $("event-dot").className = event.tone;
@@ -239,12 +262,12 @@
     setProgress("base-bar", hull);
     setText("base-hp", Math.ceil(hull * 100) + "%");
     $("base-bar").style.background = hull < .35 ? "#ff947c" : "";
-    renderSquad(allies, active);
+    renderSquad(allies, canOrder);
     for (const [index, node] of match.nodes.entries()) {
       const { button, state } = nodeCards[index];
       const color = node.faction === FACTION.ally ? "ally" : node.faction === FACTION.hostile ? "hostile" : "";
       button.className = "station " + color;
-      button.disabled = !active || !selected.size;
+      button.disabled = !canOrder || !selected.size;
       const progress = Math.round(Math.abs(node.influence) * 100);
       state.textContent = node.contested ? "Спорная" : color === "ally" ? "Наша" : color === "hostile" ? "Дроны"
         : progress > 0 ? progress + "%" : "Свободна";
@@ -252,11 +275,13 @@
       button.style.setProperty("--meter", node.influence > 0 ? "#79efc8" : "#ff9c80");
     }
 
-    $("select-all").disabled = !active || !allies.length;
-    $("hold").disabled = !active || !selected.size;
-    $("return-base").disabled = !active || !selected.size;
+    $("select-all").disabled = !canOrder || !allies.length;
+    $("hold").disabled = !canOrder || !selected.size;
+    $("return-base").disabled = !canOrder || !selected.size;
     $("pause").disabled = phase === "briefing" || phase === "ended";
-    setText("pause", phase === "paused" ? "Продолжить" : "Пауза");
+    const paused = phase === "paused";
+    $("pause-status").hidden = !paused;
+    setText("pause", paused ? "Продолжить" : "Пауза");
     $("zoom-out").disabled = view.zoom <= 1;
     $("zoom-in").disabled = view.zoom >= 2.05;
 
@@ -274,16 +299,16 @@
     }
     const atLimit = allies.length >= MAX_MECHS;
     setText("factory-state", match.queue ? "Сборка " + Math.ceil(match.queue.remaining) + " с" : allies.length + " / " + MAX_MECHS + " мехов");
-    $("build").disabled = !active || !!match.queue || atLimit || !affordable(match.bank, cost);
+    $("build").disabled = !running || !!match.queue || atLimit || !affordable(match.bank, cost);
     const freeSockets = match.pads.filter((pad) => !pad.turret || pad.turret.hp <= 0).length;
     setText("turret", freeSockets ? "Турель «Дозор» · " + TURRET_COST.join(" / ") : "Турели развёрнуты");
     $("turret").title = TURRET_COST.map((value, i) => value + " · " + resourceNames[i]).join(", ");
-    $("turret").disabled = !active || !freeSockets || !affordable(match.bank, TURRET_COST);
-    canvas.classList.toggle("aiming", active && selected.size > 0);
+    $("turret").disabled = !running || !freeSockets || !affordable(match.bank, TURRET_COST);
+    canvas.classList.toggle("aiming", canOrder && selected.size > 0);
   }
 
   function buildMech() {
-    if (!playable() || !match.requestBuild(currentBuild())) return;
+    if (!simulationRunning() || !match.requestBuild(currentBuild())) return;
     tone(305, .21, .065, 615);
     updatePanels();
   }
@@ -291,7 +316,6 @@
   $("launch").addEventListener("click", () => start());
   $("restart").addEventListener("click", () => start(true));
   $("pause").addEventListener("click", togglePause);
-  $("resume").addEventListener("click", togglePause);
   for (const button of speedButtons) {
     button.addEventListener("click", () => {
       speed = speeds[Number(button.dataset.speed) - 1];
@@ -303,7 +327,7 @@
   $("return-base").addEventListener("click", () => command({ x: 4, y: 13 }));
   $("build").addEventListener("click", buildMech);
   $("turret").addEventListener("click", () => {
-    if (playable() && match.requestTurret()) {
+    if (simulationRunning() && match.requestTurret()) {
       tone(260, .22, .06, 520);
       updatePanels();
     }
@@ -329,34 +353,33 @@
 
   $("zoom-in").addEventListener("click", () => zoomBy(.3));
   $("zoom-out").addEventListener("click", () => zoomBy(-.3));
+  window.addEventListener("pointerdown", (event) => { pointerType = event.pointerType; }, { capture: true, passive: true });
   canvas.addEventListener("pointermove", (event) => {
-    if (!playable()) return;
+    if (!ordersAllowed()) return;
     view.hover = view.hitTest(match, view.position(event))?.id || null;
   });
   canvas.addEventListener("pointerleave", () => { view.hover = null; });
 
-  function interact(event, forceMove) {
-    if (!playable()) return;
-    const screen = view.position(event);
-    const target = view.hitTest(match, screen);
+  function commandOnMap(screen) {
+    const target = view.hitTest(match, screen, isOrderTarget);
+    if (target) return command(target, target.type ? "attack" : "move");
+
     const point = view.unproject(screen.x, screen.y);
-    if (target?.type === "mech" && target.faction === FACTION.ally && !forceMove) {
-      selectUnit(target.id, event.shiftKey);
-      return;
+    if (point.x >= -.65 && point.y >= -.65 && point.x <= WIDTH - .35 && point.y <= HEIGHT - .35) {
+      return command(nearestWalkable(match.terrain, point));
     }
-    if (target?.type && target.faction === FACTION.hostile && !forceMove) {
-      command(target, "attack");
-      return;
-    }
-    if (target && !target.type) command(target);
-    else if (point.x >= -.65 && point.y >= -.65 && point.x <= WIDTH - .35 && point.y <= HEIGHT - .35) {
-      command(nearestWalkable(match.terrain, point));
-    }
+    return false;
   }
-  canvas.addEventListener("click", (event) => interact(event, false));
-  canvas.addEventListener("contextmenu", (event) => {
-    event.preventDefault();
-    interact(event, true);
+
+  canvas.addEventListener("click", (event) => {
+    if (!ordersAllowed()) return;
+    const screen = view.position(event);
+    const unit = view.hitTest(match, screen, isFriendlyMech);
+    if (unit) selectUnit(unit.id, event.shiftKey);
+    else if (touchClick(event)) commandOnMap(screen);
+  });
+  onRightClick(canvas, (event) => {
+    if (commandOnMap(view.position(event))) canvas.focus({ preventScroll: true });
   });
   window.addEventListener("keydown", (event) => {
     if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || manual.open ||
@@ -366,7 +389,7 @@
       togglePause();
       return;
     }
-    if (!playable()) return;
+    if (!ordersAllowed()) return;
     if (event.code === "KeyG") selectAll();
     if (event.code === "KeyF") buildMech();
     if (/^Digit[1-8]$/.test(event.code)) {
@@ -377,9 +400,9 @@
 
   function frame(milliseconds) {
     const now = milliseconds / 1000;
-    const dt = lastFrame ? Math.min(.14, now - lastFrame) : 0;
+    const dt = lastFrame ? clamp(now - lastFrame, 0, .14) : 0;
     lastFrame = now;
-    if (playable()) {
+    if (simulationRunning()) {
       stepBank += dt * speed;
       const step = 1 / 30;
       while (stepBank >= step && !match.winner) {

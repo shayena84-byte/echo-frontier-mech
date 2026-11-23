@@ -4,6 +4,7 @@ const FrontierView = (() => {
   const { WIDTH, HEIGHT, FACTION, noise, clamp } = EchoSim;
   const TW = 23;
   const TH = 12;
+  const STATION_TAG_FONT = "600 11px system-ui, sans-serif";
   const COLORS = { ally: "#73f0c5", hostile: "#ff896f", neutral: "#9ed8fa" };
   const MAP_CENTER = { x: (WIDTH - 1) / 2, y: (HEIGHT - 1) / 2 };
   const POLARITY = (faction) => faction === FACTION.ally ? COLORS.ally :
@@ -108,13 +109,15 @@ const FrontierView = (() => {
       return { x: event.clientX - rect.left, y: event.clientY - rect.top };
     }
 
-    hitTest(match, screen) {
+    hitTest(match, screen, accepts = () => true) {
       const s = this.scale;
       let chosen = null;
       let best = Infinity;
       for (const entity of [...match.nodes, ...match.entities()]) {
+        if (!accepts(entity)) continue;
         const point = this.project(entity.x, entity.y);
         const isNode = !entity.type;
+        if (isNode && this.hitsStationTag(entity, point, screen)) return entity;
         const model = entity.type === "mech" ? MechArt.profile(entity.chassisId) : null;
         const z = model ? model.hud * .45 : entity.type === "base" ? 29 : isNode ? 18 : 9;
         const radius = entity.type === "base" ? Math.max(19, 39 * s) : Math.max(13, (model ? model.shadow[0] + 3 : 26) * s);
@@ -122,6 +125,17 @@ const FrontierView = (() => {
         if (dist < radius && dist < best) { chosen = entity; best = dist; }
       }
       return chosen;
+    }
+
+    hitsStationTag(station, point, screen) {
+      const y = point.y + Math.max(18, 24 * this.scale);
+      if (screen.y < y - 7 || screen.y > y + 10) return false;
+      const ctx = this.context;
+      ctx.save();
+      ctx.font = STATION_TAG_FONT;
+      const halfWidth = ctx.measureText(station.name).width / 2 + 6;
+      ctx.restore();
+      return Math.abs(screen.x - point.x) <= halfWidth;
     }
 
     drawBackground(ctx) {
@@ -240,7 +254,7 @@ const FrontierView = (() => {
     }
 
     tag(ctx, text, x, y, tint, small = false) {
-      ctx.font = (small ? "600 11px" : "700 12px") + " system-ui, sans-serif";
+      ctx.font = small ? STATION_TAG_FONT : "700 12px system-ui, sans-serif";
       const w = ctx.measureText(text).width + 12;
       ctx.fillStyle = "#0b1725e8";
       ctx.fillRect(x - w / 2, y - 7, w, 17);
@@ -354,14 +368,24 @@ const FrontierView = (() => {
 
     drawPaths(ctx, match, selected) {
       ctx.save();
-      ctx.setLineDash([4, 5]);
+      const entities = match.entities();
       for (const mech of match.allies()) {
-        if (!selected.has(mech.id) || !mech.path.length) continue;
-        const points = [mech, ...mech.path].map(({ x, y }) => {
+        if (!selected.has(mech.id)) continue;
+        const target = mech.order.kind === "attack" ? entities.find(({ id }) => id === mech.order.target) : null;
+        const route = mech.path.length ? mech.path : target ? [target] : [];
+        if (!route.length) continue;
+        const points = [mech, ...route].map(({ x, y }) => {
           const p = this.project(x, y);
           return [p.x, p.y];
         });
-        line(ctx, points, "#8ff2ca9c", 1.35);
+        ctx.setLineDash([4, 5]);
+        line(ctx, points, target ? "#ff896fce" : "#8ff2ca9c", 1.35);
+        if (target) {
+          const p = this.project(target.x, target.y);
+          const radius = Math.max(9, (target.type === "base" ? 38 : 21) * this.scale);
+          ctx.setLineDash([]);
+          ellipse(ctx, p.x, p.y, radius, radius * .52, null, "#ff896f", 1.4);
+        }
       }
       ctx.restore();
     }
