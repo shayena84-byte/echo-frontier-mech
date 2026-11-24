@@ -7,11 +7,11 @@
   <meta name="description" content="Рубеж Эха — браузерная стратегия. Соберите отряд мехов, захватите станции и защитите лагерь.">
   <title>Рубеж Эха</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=8">
-  <script defer src="simulation.js?v=8"></script>
-  <script defer src="mech-art.js?v=8"></script>
-  <script defer src="renderer.js?v=8"></script>
-  <script defer src="app.js?v=8"></script>
+  <link rel="stylesheet" href="style.css?v=9">
+  <script defer src="simulation.js?v=9"></script>
+  <script defer src="mech-art.js?v=9"></script>
+  <script defer src="renderer.js?v=9"></script>
+  <script defer src="app.js?v=9"></script>
 </head>
 <body>
   <header class="command-bar">
@@ -56,7 +56,7 @@
 
   <main class="layout">
     <section class="battlefield" id="battlefield" aria-label="Поле боя">
-      <canvas id="terrain" aria-label="Карта каньона. Левая кнопка выбирает меха, правая задаёт цель. Колесо меняет масштаб, перетаскивание сдвигает карту." tabindex="0"></canvas>
+      <canvas id="terrain" aria-label="Карта каньона. Левая кнопка показывает сведения и выбирает своего меха, правая отдаёт приказ. Колесо меняет масштаб, перетаскивание сдвигает карту." tabindex="0"></canvas>
       <div class="field-header">
         <div class="sector">
           <span class="sector-cap">Сектор</span>
@@ -75,7 +75,47 @@
         <button type="button" id="zoom-in" aria-label="Увеличить масштаб">+</button>
       </div>
       <div class="field-bottom">
-        <div class="field-log" aria-live="polite"><span id="event-dot"></span><span id="event-text">Связь с лагерем «Эхо» установлена.</span></div>
+        <div class="field-stack">
+          <section class="inspection-card" id="object-inspector" aria-labelledby="inspection-name" hidden>
+            <div class="inspection-heading">
+              <div>
+                <h2 id="inspection-name"></h2>
+                <p id="inspection-status"></p>
+              </div>
+              <button class="utility inspection-close" type="button" id="close-inspector" aria-label="Закрыть сведения">×</button>
+            </div>
+            <div id="inspection-mech" hidden>
+              <dl class="inspection-specs">
+                <div><dt>Шасси</dt><dd id="inspect-chassis"></dd></div>
+                <div><dt>Модуль</dt><dd id="inspect-module"></dd></div>
+                <div><dt>Оружие 1</dt><dd id="inspect-weapon-1"></dd></div>
+                <div><dt>Оружие 2</dt><dd id="inspect-weapon-2"></dd></div>
+              </dl>
+              <div class="inspection-line"><span>Приказ</span><strong id="inspect-order"></strong></div>
+            </div>
+            <div id="inspection-site" hidden>
+              <h3 id="inspect-income-label"></h3>
+              <dl class="inspection-rates">
+                <div class="alloy"><dt>Сплав</dt><dd id="inspect-alloy"></dd></div>
+                <div class="energy"><dt>Энергия</dt><dd id="inspect-energy"></dd></div>
+                <div class="signal"><dt>Данные</dt><dd id="inspect-signal"></dd></div>
+              </dl>
+              <div class="inspection-line">
+                <span>Выпуск</span>
+                <strong id="inspect-capacity"></strong>
+              </div>
+              <div class="inspection-line">
+                <span>Очередь</span>
+                <strong id="inspect-queue"></strong>
+              </div>
+            </div>
+            <div class="inspection-actions" id="inspect-actions" hidden>
+              <button class="secondary" type="button" id="inspect-gate">К воротам</button>
+              <button class="secondary" type="button" id="inspect-attack">Атаковать</button>
+            </div>
+          </section>
+          <div class="field-log" aria-live="polite"><span id="event-dot"></span><span id="event-text">Связь с лагерем «Эхо» установлена.</span></div>
+        </div>
         <div class="legend" aria-label="Обозначения на карте">
           <span class="legend-ally">Отряд</span><span class="legend-neutral">Нейтрал.</span><span class="legend-hostile">Дроны</span>
         </div>
@@ -116,11 +156,11 @@
           <summary>Заводы и базы <span id="facility-count" class="panel-count">0 / 4</span></summary>
           <div class="stations" id="facilities"></div>
         </details>
-        <button class="station citadel-gate" type="button" id="citadel-gate-order" title="Отправить меха к воротам Цитадели" disabled>
+        <button class="station citadel-gate" type="button" id="citadel-gate-order" title="Сведения о Цитадели · правый клик отправляет к воротам" disabled>
           <span class="call" aria-hidden="true">Ц</span><strong>Ворота Цитадели</strong><small id="citadel-gate-status">К захвату</small>
         </button>
         <p class="camp-gate-warning" id="camp-gate-status" hidden></p>
-        <div class="base-status"><span>Оборона лагеря</span><strong id="base-hp">100%</strong></div>
+        <button class="base-status" id="camp-inspect" type="button" title="Сведения о лагере «Эхо»" disabled><span>Оборона лагеря</span><strong id="base-hp">100%</strong></button>
         <div class="progress base-progress" aria-label="Прочность лагеря"><span id="base-bar"></span></div>
       </section>
 
@@ -192,9 +232,10 @@
         <button class="utility help-button" type="button" id="close-help" aria-label="Закрыть справку">×</button>
       </div>
       <ul>
-        <li>Левый клик по своему меху или его карточке выбирает его. Удерживайте <kbd>Shift</kbd>, чтобы выбрать несколько мехов.</li>
+        <li>Левый клик по меху показывает комплектацию и приказ. Клик по своему меху также выбирает его. Удерживайте <kbd>Shift</kbd>, чтобы выбрать несколько мехов.</li>
+        <li>Клик по базе или заводу показывает доход, темп выпуска и очередь. На сенсорном экране для приказа используйте кнопки «К воротам» и «Атаковать» в карточке объекта.</li>
         <li>Колесо приближает карту к курсору. Перетаскивайте карту мышью или пальцем. На сенсорном экране сводите и разводите два пальца для зума. Кнопка с процентами возвращает общий вид.</li>
-        <li>Правый клик по земле задаёт маршрут, по воротам отправляет меха на захват, по дрону или действующему зданию Цитадели отдаёт приказ атаковать. Ворота можно выбрать и кнопкой в панели станций. На сенсорном экране используйте касания.</li>
+        <li>Правый клик по земле задаёт маршрут, по воротам отправляет меха на захват, по дрону или действующему зданию Цитадели отдаёт приказ атаковать. Клик по карточке станции отправляет к её воротам.</li>
         <li>Кнопка «Захватить ближайшую точку» выбирает свободные или вражеские ворота по длине маршрута. После захвата мех идёт к следующей точке. Кнопка «Атаковать меха противника» направляет вооружённых мехов за ближайшим вражеским мехом.</li>
         <li>При групповом приказе один мех занимает ворота, остальные прикрывают его. Если он уйдёт или будет уничтожен, захват начнётся заново. Противник в воротах приостанавливает захват.</li>
         <li>Для победы удержите ворота Цитадели. Когда обстрел выводит из строя оборону и завод, один из атакующих мехов идёт к воротам. Дроны могут захватить лагерь по тем же правилам.</li>

@@ -10,17 +10,20 @@
   const canvas = $("terrain");
   const view = new FrontierView(canvas);
   const manual = $("manual");
+  const inspector = $("object-inspector");
   const buildQueue = $("build-queue");
   const productionPicker = $("production-site");
   const speedButtons = [...document.querySelectorAll(".speed-options button")];
   const speeds = [0.5, 1, 2];
   const format = new Intl.NumberFormat("ru", { maximumFractionDigits: 1 });
+  const rateFormat = new Intl.NumberFormat("ru", { maximumFractionDigits: 3 });
   const unitCards = new Map();
   const mapPointers = new Map();
   const isFriendlyMech = (entity) => entity.type === "mech" && entity.faction === FACTION.ally;
   const isOrderTarget = (entity) => entity.gate || entity.faction === FACTION.hostile;
   let match = new Match();
   let selected = new Set([match.allies()[0].id]);
+  let inspected = null;
   let phase = "briefing";
   let lastFrame = 0;
   let lastPanels = -1;
@@ -88,12 +91,94 @@
   }
 
   function selectUnit(id, append = false, center = false) {
+    const unit = match.allies().find((item) => item.id === id);
+    if (!unit) return;
     if (!append) selected.clear();
     if (append && selected.has(id)) selected.delete(id);
     else selected.add(id);
-    if (center && !append && view.zoom > 1) view.zoomTo(view.zoom, match.allies().find((unit) => unit.id === id));
+    if (center && !append && view.zoom > 1) view.zoomTo(view.zoom, unit);
     tone(455);
+    showInspection(unit);
+  }
+
+  function showInspection(entity) {
+    inspected = entity;
     updatePanels();
+    if (entity) inspector.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+
+  function describeOrder(unit) {
+    const { order } = unit;
+    if (order.escort && match.units.some((other) => other.hp > 0 && other.order === order.escort)) {
+      const site = match.sites.find(({ id }) => id === order.escort.target);
+      if (site) return "Прикрывать захват · " + site.name;
+    }
+    const site = match.sites.find(({ id }) => id === order.target);
+    switch (order.kind) {
+      case "attack": {
+        const target = site ?? match.entities().find(({ id }) => id === order.target);
+        return target ? "Атаковать · " + target.name : "Атаковать";
+      }
+      case "capture":
+        if (!site) return "Захват";
+        if (site.faction === unit.faction) return "Оборонять ворота · " + site.name;
+        if (site.gate.capturer === unit.id) {
+          const progress = site.gate.contested ? "Захват оспаривается" : "Захват " + Math.floor(site.gate.progress * 100) + "%";
+          return progress + " · " + site.name;
+        }
+        return "Захват · " + site.name;
+      case "repair":
+        return site ? "На ремонт · " + site.name : "На ремонт";
+      case "move":
+        return (unit.path.length ? "Переместиться" : "На позиции") + " · клетка " + (order.x + 1) + ", " + (order.y + 1);
+      default:
+        return "Удерживать позицию";
+    }
+  }
+
+  function updateInspection(canCommand, hasArmed) {
+    if (inspected?.type === "mech" && inspected.hp <= 0) inspected = null;
+    inspector.hidden = !inspected;
+    if (!inspected) return;
+
+    const entity = inspected;
+    const mech = entity.type === "mech";
+    const ally = entity.faction === FACTION.ally;
+    const neutral = entity.faction === FACTION.neutral;
+    const owner = ally ? (mech ? "Ваш отряд" : "Под вашим контролем") : neutral ? "Нейтральный объект" : "Дроны";
+    inspector.classList.toggle("ally", ally);
+    inspector.classList.toggle("hostile", !ally && !neutral);
+    setText("inspection-name", entity.name);
+    $("inspection-mech").hidden = !mech;
+    $("inspection-site").hidden = mech;
+    if (mech) {
+      setText("inspection-status", owner + " · " + Math.ceil(entity.hp) + " / " + entity.hull + " ОЗ");
+      setText("inspect-chassis", CHASSIS[entity.chassisId].name);
+      setText("inspect-module", KIT[entity.kitId]?.name ?? "—");
+      setText("inspect-weapon-1", WEAPONS[entity.weaponIds[0]]?.name ?? "—");
+      setText("inspect-weapon-2", WEAPONS[entity.weaponIds[1]]?.name ?? "—");
+      setText("inspect-order", describeOrder(entity));
+    } else {
+      const active = match.productionFor(entity.faction).includes(entity);
+      const paused = !simulationRunning();
+      const status = neutral ? "выпуск после захвата" : !active ? "выпуск остановлен" : paused ? "пауза" : "";
+      setText("inspection-status", status ? owner + " · " + status : owner);
+      setText("inspect-income-label", neutral ? "Доход после захвата за игровую секунду" : "Доход за игровую секунду");
+      for (const [i, resource] of RESOURCES.entries()) {
+        setText("inspect-" + resource, rateFormat.format(active || neutral ? entity.rates[i] : 0));
+      }
+      setText("inspect-capacity", active || neutral ? "1 мех за " + buildEta(BUILD_SECONDS) : "Остановлен");
+      const job = entity.queue[0];
+      setText("inspect-queue", job ? entity.queue.length + " · " + CHASSIS[job.build[0]].name + " · " +
+        buildEta(job.remaining) + " до выпуска" : "Нет заказов");
+    }
+
+    const canAttack = !ally && (mech || (entity.type === "base" && entity.hp > 0));
+    $("inspect-actions").hidden = mech && !canAttack;
+    $("inspect-gate").hidden = mech;
+    $("inspect-gate").disabled = !canCommand;
+    $("inspect-attack").hidden = !canAttack;
+    $("inspect-attack").disabled = !canCommand || !hasArmed;
   }
 
   function selectAll() {
@@ -149,6 +234,7 @@
       view.overview();
       productionPicker.value = match.bases[0].id;
     }
+    inspected = null;
     phase = "running";
     stepBank = 0;
     $("intro").hidden = true;
@@ -168,6 +254,7 @@
 
   function showEnd() {
     phase = "ended";
+    inspected = null;
     const won = match.winner === FACTION.ally;
     setText("end-kicker", won ? "Сигнал принят" : "Связь потеряна");
     setText("end-title", won ? "Операция удалась" : "Лагерь пал");
@@ -193,16 +280,16 @@
     return { button, call, name, state };
   }
 
-  function bindCaptureControl(button, getSite) {
+  function bindCaptureControl(button, getSite, inspectOnClick = false) {
     const sendToGate = () => {
       const site = getSite();
       if (command(site, "capture") && view.zoom > 1) view.zoomTo(view.zoom, site.gate);
     };
     onRightClick(button, sendToGate);
-    button.addEventListener("click", sendToGate);
+    button.addEventListener("click", inspectOnClick ? () => showInspection(getSite()) : sendToGate);
   }
 
-  bindCaptureControl($("citadel-gate-order"), () => match.bases[1]);
+  bindCaptureControl($("citadel-gate-order"), () => match.bases[1], true);
   const nodeCards = match.nodes.map((node, index) => {
     const card = makeCard("station");
     card.name.textContent = node.name;
@@ -216,8 +303,8 @@
     const card = makeCard("station facility");
     card.name.textContent = site.name;
     card.call.textContent = site.call;
-    card.button.title = "Сборка мехов и половина дохода стартовой базы" + (site.type === "outpost" ? " · ремонт" : "");
-    bindCaptureControl(card.button, () => match.facilities[index]);
+    card.button.title = "Сведения о площадке · правый клик отправляет к воротам";
+    bindCaptureControl(card.button, () => match.facilities[index], true);
     $("facilities").append(card.button);
     return card;
   });
@@ -391,7 +478,8 @@
     const canCommand = canOrder && selected.size > 0;
     const incoming = new Set(allies.filter((unit) => unit.order.continuous).map((unit) => unit.order.target));
     const citadelButton = $("citadel-gate-order");
-    citadelButton.disabled = !canCommand;
+    citadelButton.disabled = !canOrder;
+    $("camp-inspect").disabled = !canOrder;
     const citadelStatus = incoming.has(enemy.id) ? "Мех в пути" : enemy.hp <= 0 ? "Оборона отключена" : "К захвату";
     setText("citadel-gate-status", gateStatus(enemy.gate, citadelStatus));
     showGateProgress(citadelButton, enemy.gate);
@@ -402,7 +490,7 @@
     setText("base-hp", base.hp > 0 ? Math.ceil(hull * 100) + "%" : "Отключена");
     $("base-bar").style.background = hull < .35 ? "#ff947c" : "";
     match.nodes.forEach((node, i) => updateSiteCard(nodeCards[i], node, canCommand, incoming.has(node.id)));
-    match.facilities.forEach((site, i) => updateSiteCard(facilityCards[i], site, canCommand, incoming.has(site.id)));
+    match.facilities.forEach((site, i) => updateSiteCard(facilityCards[i], site, canOrder, incoming.has(site.id)));
 
     const hasArmed = allies.some((unit) => selected.has(unit.id) && unit.range > 0);
     const hasTarget = match.mechs(FACTION.hostile).length > 0;
@@ -445,6 +533,7 @@
     $("turret").title = TURRET_COST.map((value, i) => value + " · " + resourceNames[i]).join(", ");
     $("turret").disabled = !running || base.hp <= 0 || !freeSocket || !affordable(bank, TURRET_COST);
     canvas.classList.toggle("aiming", canOrder && selected.size > 0);
+    updateInspection(canCommand, hasArmed);
   }
 
   function buildMech() {
@@ -457,6 +546,17 @@
   $("launch").addEventListener("click", () => start());
   $("restart").addEventListener("click", () => start(true));
   $("pause").addEventListener("click", togglePause);
+  $("camp-inspect").addEventListener("click", () => showInspection(match.bases[0]));
+  $("close-inspector").addEventListener("click", () => {
+    showInspection(null);
+    canvas.focus({ preventScroll: true });
+  });
+  $("inspect-gate").addEventListener("click", () => {
+    if (inspected?.gate && command(inspected, "capture")) updatePanels();
+  });
+  $("inspect-attack").addEventListener("click", () => {
+    if (inspected && command(inspected, "attack")) updatePanels();
+  });
   for (const button of speedButtons) {
     button.addEventListener("click", () => {
       speed = speeds[Number(button.dataset.speed) - 1];
@@ -575,9 +675,13 @@
   canvas.addEventListener("click", (event) => {
     if (!ordersAllowed() || mapMoved) return;
     const screen = view.position(event);
-    const unit = view.hitTest(match, screen, isFriendlyMech);
-    if (unit) selectUnit(unit.id, event.shiftKey);
-    else if (touchClick(event)) commandOnMap(screen);
+    const target = view.hitTest(match, screen, (entity) => entity.type === "mech" || !!entity.rates);
+    if (target && isFriendlyMech(target)) selectUnit(target.id, event.shiftKey);
+    else if (target) showInspection(target);
+    else {
+      if (inspected) showInspection(null);
+      if (touchClick(event)) commandOnMap(screen);
+    }
   });
   onRightClick(canvas, (event) => {
     if (commandOnMap(view.position(event))) canvas.focus({ preventScroll: true });
@@ -585,6 +689,12 @@
   window.addEventListener("keydown", (event) => {
     if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || manual.open ||
         event.target.closest?.("input, select, textarea")) return;
+    if (event.code === "Escape" && inspected) {
+      event.preventDefault();
+      showInspection(null);
+      canvas.focus({ preventScroll: true });
+      return;
+    }
     if (event.code === "Space" && !event.target.closest?.("button") && (phase === "running" || phase === "paused")) {
       event.preventDefault();
       togglePause();
