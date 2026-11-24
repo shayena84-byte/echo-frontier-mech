@@ -4,7 +4,6 @@ const EchoSim = (() => {
   const WIDTH = 37;
   const HEIGHT = 27;
   const MAX_MECHS = 8;
-  const BUILD_SECONDS = 4.2;
   const STATION_CAPTURE_SECONDS = 5.8;
   const FACILITY_CAPTURE_SECONDS = 8;
   const BASE_CAPTURE_SECONDS = 12;
@@ -17,19 +16,19 @@ const EchoSim = (() => {
   const FACILITY_INCOME = BASE_INCOME.map((rate) => rate / 2);
   const BASE_HULL = 740;
   const CHASSIS = [
-    { name: "Стриж", detail: "Быстрое шасси · 90 ОЗ", speed: 2.65, hull: 90, cost: [36, 15, 0] },
-    { name: "Веретено", detail: "Универсальное · 122 ОЗ", speed: 2.15, hull: 122, cost: [54, 18, 0] },
-    { name: "Гранит", detail: "Танк · 168 ОЗ", speed: 1.64, hull: 168, cost: [73, 20, 4] },
+    { name: "Стриж", detail: "Быстрое шасси · 90 ОЗ", speed: 2.65, hull: 90, cost: [36, 15, 0], assemblyTime: 2.6 },
+    { name: "Веретено", detail: "Универсальное · 122 ОЗ", speed: 2.15, hull: 122, cost: [54, 18, 0], assemblyTime: 3.5 },
+    { name: "Гранит", detail: "Танк · 168 ОЗ", speed: 1.64, hull: 168, cost: [73, 20, 4], assemblyTime: 4.6 },
   ];
   const WEAPONS = [
-    { name: "Импульс", detail: "18 урона · 3,5 дальность", damage: 18, range: 3.5, cycle: 0.77, color: "#88f1cf", cost: [29, 20, 0] },
-    { name: "Гаусс", detail: "35 урона · 5 дальность", damage: 35, range: 5, cycle: 1.48, color: "#ffc081", cost: [44, 28, 6] },
-    { name: "Дуга", detail: "15 урона · 2,8 дальность", damage: 15, range: 2.8, cycle: 0.47, color: "#c9acff", cost: [28, 40, 4] },
+    { name: "Импульс", detail: "18 урона · 3,5 дальность", damage: 18, range: 3.5, cycle: 0.77, color: "#88f1cf", cost: [29, 20, 0], assemblyTime: 1.6 },
+    { name: "Гаусс", detail: "35 урона · 5 дальность", damage: 35, range: 5, cycle: 1.48, color: "#ffc081", cost: [44, 28, 6], assemblyTime: 2.4 },
+    { name: "Дуга", detail: "15 урона · 2,8 дальность", damage: 15, range: 2.8, cycle: 0.47, color: "#c9acff", cost: [28, 40, 4], assemblyTime: 2 },
   ];
   const KIT = [
-    { name: "Сканер", detail: "Скорость захвата ×1,55", capture: 1.55, hull: 0, repair: 0, cost: [9, 11, 1] },
-    { name: "Обшивка", detail: "Запас прочности +42 ОЗ", capture: 1, hull: 42, range: 0, repair: 0, cost: [24, 9, 2] },
-    { name: "Ремдрон", detail: "Восстановление вне боя", capture: 1, hull: 0, range: 0, repair: 6, cost: [16, 19, 12] },
+    { name: "Сканер", detail: "Скорость захвата ×1,55", capture: 1.55, hull: 0, repair: 0, cost: [9, 11, 1], assemblyTime: .8 },
+    { name: "Обшивка", detail: "Запас прочности +42 ОЗ", capture: 1, hull: 42, range: 0, repair: 0, cost: [24, 9, 2], assemblyTime: 1.1 },
+    { name: "Ремдрон", detail: "Восстановление вне боя", capture: 1, hull: 0, range: 0, repair: 6, cost: [16, 19, 12], assemblyTime: 1.7 },
   ];
   const NODE_DEFS = [
     { name: "Разлом", x: 6, y: 11, gateX: 6, gateY: 12, resource: 0, income: 2.6, call: "Р" },
@@ -129,15 +128,24 @@ const EchoSim = (() => {
 
   const validSlot = (id, catalog) => id === null || (Number.isInteger(id) && !!catalog[id]);
 
-  function buildCost(build) {
+  function buildParts(build) {
     const design = normalizeBuild(build);
     if (!Array.isArray(design) || design.length !== 4) return null;
     const [chassis, firstWeapon, secondWeapon, kit] = design;
     if (chassis === null || !validSlot(chassis, CHASSIS) || !validSlot(firstWeapon, WEAPONS) ||
         !validSlot(secondWeapon, WEAPONS) || !validSlot(kit, KIT)) return null;
     const equipment = equipmentFor([firstWeapon, secondWeapon], kit);
-    if (!equipment.length) return null;
-    return CHASSIS[chassis].cost.map((price, i) => equipment.reduce((sum, part) => sum + part.cost[i], price));
+    return equipment.length ? [CHASSIS[chassis], ...equipment] : null;
+  }
+
+  function buildCost(build) {
+    const parts = buildParts(build);
+    return parts && RESOURCES.map((_, i) => parts.reduce((sum, part) => sum + part.cost[i], 0));
+  }
+
+  function buildDuration(build) {
+    const parts = buildParts(build);
+    return parts && Math.round(parts.reduce((sum, part) => sum + part.assemblyTime, 0) * 10) / 10;
   }
 
   function nearestWalkable(terrain, target) {
@@ -453,7 +461,8 @@ const EchoSim = (() => {
       if (!this.canBuild(build, faction, site)) return false;
       const base = this.baseFor(faction);
       this.spend(base, buildCost(build));
-      site.queue.push({ build: normalizeBuild(build).slice(), remaining: BUILD_SECONDS });
+      const duration = buildDuration(build);
+      site.queue.push({ build: normalizeBuild(build).slice(), duration, remaining: duration });
       if (faction === FACTION.ally) this.log("Заказ принят · " + site.name + " · " + CHASSIS[build[0]].name, "ally");
       return true;
     }
@@ -806,8 +815,8 @@ const EchoSim = (() => {
     }
   }
 
-  return { WIDTH, HEIGHT, MAX_MECHS, BUILD_SECONDS, BASE_CAPTURE_SECONDS, FACILITY_CAPTURE_SECONDS, RESOURCES, FACTION, CHASSIS, WEAPONS, KIT, TURRET_COST,
-    DEFAULT_BUILD, Match, clamp, distance, noise, findPath, nearestWalkable, buildCost, equipmentFor, affordable };
+  return { WIDTH, HEIGHT, MAX_MECHS, BASE_CAPTURE_SECONDS, FACILITY_CAPTURE_SECONDS, RESOURCES, FACTION, CHASSIS, WEAPONS, KIT, TURRET_COST,
+    DEFAULT_BUILD, Match, clamp, distance, noise, findPath, nearestWalkable, buildCost, buildDuration, equipmentFor, affordable };
 })();
 
 if (typeof module === "object" && module.exports) module.exports = EchoSim;

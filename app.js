@@ -2,8 +2,8 @@
 
 (() => {
   const {
-    WIDTH, HEIGHT, MAX_MECHS, BUILD_SECONDS, BASE_CAPTURE_SECONDS, RESOURCES, FACTION, CHASSIS, WEAPONS, KIT,
-    TURRET_COST, DEFAULT_BUILD, Match, affordable, buildCost, equipmentFor, clamp, nearestWalkable,
+    WIDTH, HEIGHT, MAX_MECHS, BASE_CAPTURE_SECONDS, RESOURCES, FACTION, CHASSIS, WEAPONS, KIT,
+    TURRET_COST, DEFAULT_BUILD, Match, affordable, buildCost, buildDuration, equipmentFor, clamp, nearestWalkable,
   } = EchoSim;
   const resourceNames = ["сплав", "энергия", "данные"];
   const $ = (id) => document.getElementById(id);
@@ -13,10 +13,16 @@
   const inspector = $("object-inspector");
   const buildQueue = $("build-queue");
   const productionPicker = $("production-site");
+  const pauseButton = $("pause");
   const speedButtons = [...document.querySelectorAll(".speed-options button")];
   const speeds = [0.5, 1, 2];
   const format = new Intl.NumberFormat("ru", { maximumFractionDigits: 1 });
   const rateFormat = new Intl.NumberFormat("ru", { maximumFractionDigits: 3 });
+  const [chassisTimes, weaponTimes, kitTimes] = [CHASSIS, WEAPONS, KIT]
+    .map((catalog) => catalog.map((part) => part.assemblyTime));
+  const minAssembly = Math.min(...chassisTimes) + Math.min(...weaponTimes, ...kitTimes);
+  const maxAssembly = Math.max(...chassisTimes) + 2 * Math.max(...weaponTimes) + Math.max(...kitTimes);
+  const assemblyRange = format.format(minAssembly) + "–" + format.format(maxAssembly) + " с на меха";
   const unitCards = new Map();
   const mapPointers = new Map();
   const isFriendlyMech = (entity) => entity.type === "mech" && entity.faction === FACTION.ally;
@@ -31,7 +37,7 @@
   let currentSound = null;
   let audioEnabled = false;
   let stepBank = 0;
-  let speed = speeds[1];
+  let speed = speeds[0];
   let lastPreview = "";
   let shownQueue = [];
   let factoryListKey = null;
@@ -42,7 +48,8 @@
     const rounded = Math.max(0, Math.ceil(seconds));
     return String(Math.floor(rounded / 60)).padStart(2, "0") + ":" + String(rounded % 60).padStart(2, "0");
   };
-  const buildEta = (seconds) => format.format(Math.ceil(seconds * 10) / 10) + " с";
+  const secondsText = (seconds) => format.format(seconds) + " с";
+  const buildEta = (seconds) => secondsText(Math.ceil(seconds * 10 - 1e-9) / 10);
 
   function setText(id, value) {
     const element = $(id);
@@ -167,7 +174,7 @@
       for (const [i, resource] of RESOURCES.entries()) {
         setText("inspect-" + resource, rateFormat.format(active || neutral ? entity.rates[i] : 0));
       }
-      setText("inspect-capacity", active || neutral ? "1 мех за " + buildEta(BUILD_SECONDS) : "Остановлен");
+      setText("inspect-capacity", active || neutral ? assemblyRange : "Остановлен");
       const job = entity.queue[0];
       setText("inspect-queue", job ? entity.queue.length + " · " + CHASSIS[job.build[0]].name + " · " +
         buildEta(job.remaining) + " до выпуска" : "Нет заказов");
@@ -223,6 +230,11 @@
     updatePanels();
   }
 
+  function setSpeed(index) {
+    speed = speeds[index];
+    speedButtons.forEach((button, i) => button.setAttribute("aria-pressed", String(i === index)));
+  }
+
   function start(reset = false) {
     if (reset) {
       match = new Match();
@@ -233,9 +245,10 @@
       view.hover = null;
       view.overview();
       productionPicker.value = match.bases[0].id;
+      setSpeed(0);
     }
     inspected = null;
-    phase = "running";
+    phase = "paused";
     stepBank = 0;
     $("intro").hidden = true;
     $("end-screen").hidden = true;
@@ -248,7 +261,6 @@
     if (phase !== "running" && phase !== "paused") return;
     phase = phase === "paused" ? "running" : "paused";
     lastFrame = performance.now() / 1000;
-    canvas.focus({ preventScroll: true });
     updatePanels();
   }
 
@@ -398,7 +410,7 @@
   function updateBuildQueue(queue, statusText) {
     if (queue.length !== shownQueue.length || queue.some((job, i) => job !== shownQueue[i])) {
       shownQueue = queue.slice();
-      buildQueue.replaceChildren(...queue.map(({ build }, i) => {
+      buildQueue.replaceChildren(...queue.map(({ build, duration }, i) => {
         const row = document.createElement("li");
         const name = document.createElement("strong");
         const details = document.createElement("small");
@@ -407,7 +419,7 @@
         details.textContent = equipmentNames(build.slice(1, 3), build[3]);
         status.className = "build-job-status";
         if (i === 0) status.id = "active-build-time";
-        else status.textContent = "Ожидает";
+        else status.textContent = "Ожидает · " + secondsText(duration);
         row.append(name, details, status);
         return row;
       }));
@@ -418,7 +430,7 @@
     $("build-progress").hidden = !active;
     if (active) {
       setText("active-build-time", statusText + " · " + buildEta(active.remaining));
-      setProgress("build-bar", 1 - active.remaining / BUILD_SECONDS);
+      setProgress("build-bar", 1 - active.remaining / active.duration);
     }
   }
 
@@ -500,9 +512,10 @@
     $("attack-mech").title = !hasArmed ? "Выберите меха с оружием" : !hasTarget ? "На поле нет вражеских мехов" : "Преследовать ближайшего вражеского меха";
     $("hold").disabled = !canCommand;
     $("return-base").disabled = !canCommand || !match.repairSites(FACTION.ally).length;
-    $("pause").disabled = phase === "briefing" || phase === "ended";
+    pauseButton.disabled = phase === "briefing" || phase === "ended";
+    pauseButton.setAttribute("aria-pressed", String(paused));
+    pauseButton.title = (paused ? "Снять паузу" : "Поставить на паузу") + " · Пробел";
     $("pause-status").hidden = !paused;
-    setText("pause", paused ? "Продолжить" : "Пауза");
     $("zoom-out").disabled = view.zoom <= FrontierView.MIN_ZOOM;
     $("zoom-in").disabled = view.zoom >= FrontierView.MAX_ZOOM;
     setText("zoom-overview", Math.round(view.zoom * 100) + "%");
@@ -514,6 +527,9 @@
       lastPreview = preview;
     }
     const cost = buildCost(design);
+    const duration = buildDuration(design);
+    $("build-duration").hidden = duration === null;
+    setText("build-duration-value", duration === null ? "" : secondsText(duration));
     for (const [slot, { id, catalog }] of buildSlots.entries()) {
       const detailId = id + "-detail";
       const detail = catalog[design[slot]]?.detail;
@@ -545,7 +561,7 @@
 
   $("launch").addEventListener("click", () => start());
   $("restart").addEventListener("click", () => start(true));
-  $("pause").addEventListener("click", togglePause);
+  pauseButton.addEventListener("click", togglePause);
   $("camp-inspect").addEventListener("click", () => showInspection(match.bases[0]));
   $("close-inspector").addEventListener("click", () => {
     showInspection(null);
@@ -557,12 +573,7 @@
   $("inspect-attack").addEventListener("click", () => {
     if (inspected && command(inspected, "attack")) updatePanels();
   });
-  for (const button of speedButtons) {
-    button.addEventListener("click", () => {
-      speed = speeds[Number(button.dataset.speed) - 1];
-      for (const option of speedButtons) option.setAttribute("aria-pressed", String(option === button));
-    });
-  }
+  speedButtons.forEach((button, index) => button.addEventListener("click", () => setSpeed(index)));
   $("select-all").addEventListener("click", selectAll);
   $("capture-nearest").addEventListener("click", () => commandNearest("capture"));
   $("attack-mech").addEventListener("click", () => commandNearest("attack"));

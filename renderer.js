@@ -1,7 +1,7 @@
 "use strict";
 
 const FrontierView = (() => {
-  const { WIDTH, HEIGHT, FACTION, BUILD_SECONDS, noise, clamp } = EchoSim;
+  const { WIDTH, HEIGHT, FACTION, noise, clamp } = EchoSim;
   const TW = 23;
   const TH = 12;
   const MIN_ZOOM = .82;
@@ -488,7 +488,7 @@ const FrontierView = (() => {
       ctx.restore();
       const job = site.queue[0];
       if (job) this.bar(ctx, p.x, p.y + 15 * this.scale, Math.max(13, 46 * this.scale),
-        clamp(1 - job.remaining / BUILD_SECONDS, 0, 1), tint);
+        clamp(1 - job.remaining / job.duration, 0, 1), tint);
     }
 
     drawTurret(ctx, turret) {

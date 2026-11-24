@@ -7,11 +7,11 @@
   <meta name="description" content="Рубеж Эха — браузерная стратегия. Соберите отряд мехов, захватите станции и защитите лагерь.">
   <title>Рубеж Эха</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=9">
-  <script defer src="simulation.js?v=9"></script>
-  <script defer src="mech-art.js?v=9"></script>
-  <script defer src="renderer.js?v=9"></script>
-  <script defer src="app.js?v=9"></script>
+  <link rel="stylesheet" href="style.css?v=10">
+  <script defer src="simulation.js?v=10"></script>
+  <script defer src="mech-art.js?v=10"></script>
+  <script defer src="renderer.js?v=10"></script>
+  <script defer src="app.js?v=10"></script>
 </head>
 <body>
   <header class="command-bar">
@@ -43,13 +43,13 @@
       <div class="speed-control" role="group" aria-label="Скорость игры">
         <span aria-hidden="true">Скорость</span>
         <div class="speed-options">
-          <button type="button" data-speed="1" aria-pressed="false" aria-label="Скорость 1, медленная" title="Медленная · 0,5×">1</button>
-          <button type="button" data-speed="2" aria-pressed="true" aria-label="Скорость 2, обычная" title="Обычная · 1×">2</button>
+          <button type="button" data-speed="1" aria-pressed="true" aria-label="Скорость 1, медленная" title="Медленная · 0,5×">1</button>
+          <button type="button" data-speed="2" aria-pressed="false" aria-label="Скорость 2, обычная" title="Обычная · 1×">2</button>
           <button type="button" data-speed="3" aria-pressed="false" aria-label="Скорость 3, быстрая" title="Быстрая · 2×">3</button>
         </div>
       </div>
       <button class="utility" type="button" id="sound" aria-pressed="false">Звук выкл.</button>
-      <button class="utility" type="button" id="pause" disabled>Пауза</button>
+      <button class="utility pause-toggle" type="button" id="pause" aria-pressed="false" aria-keyshortcuts="Space" disabled>Пауза</button>
       <button class="utility help-button" type="button" id="help" aria-label="Управление и правила">?</button>
     </div>
   </header>
@@ -125,7 +125,7 @@
         <div class="screen-card">
           <div class="screen-kicker">Операция «Связной»</div>
           <h2>Верните связь<br>с орбитой.</h2>
-          <p>Захватите ворота Цитадели, чтобы восстановить связь. Займите заводы и передовые базы, чтобы собирать мехов ближе к фронту.</p>
+          <p>Захватите ворота Цитадели, чтобы восстановить связь. Займите заводы и передовые базы, чтобы собирать мехов ближе к фронту. Карта откроется на паузе.</p>
           <button class="primary" type="button" id="launch">Начать операцию</button>
         </div>
       </div>
@@ -207,7 +207,10 @@
         <small class="build-detail" id="module-detail" hidden></small>
         <p class="build-requirement" id="build-requirement" hidden>Добавьте хотя бы одно оружие или модуль.</p>
         <div class="assembly-overview">
-          <div class="cost" id="build-cost" aria-label="Стоимость сборки"></div>
+          <div>
+            <div class="cost" id="build-cost" aria-label="Стоимость сборки"></div>
+            <p class="assembly-time" id="build-duration" hidden>Сборка <strong id="build-duration-value"></strong></p>
+          </div>
           <canvas id="mech-preview" width="216" height="128" role="img" aria-label="Внешний вид собираемого меха"></canvas>
         </div>
         <button class="primary build-button" type="button" id="build" disabled>Заказать меха <kbd>F</kbd></button>
@@ -240,11 +243,11 @@
         <li>При групповом приказе один мех занимает ворота, остальные прикрывают его. Если он уйдёт или будет уничтожен, захват начнётся заново. Противник в воротах приостанавливает захват.</li>
         <li>Для победы удержите ворота Цитадели. Когда обстрел выводит из строя оборону и завод, один из атакующих мехов идёт к воротам. Дроны могут захватить лагерь по тем же правилам.</li>
         <li>Заводы и передовые базы нейтральны до захвата. Каждая даёт половину дохода стартовой базы и собирает мехов в своей очереди. Выберите площадку в мастерской. Передовые базы также ремонтируют мехов.</li>
-        <li>На паузе можно выбрать мехов и отдать им приказы. Отряд начнёт их выполнять после возобновления миссии.</li>
-        <li>Заказывайте мехов в мастерской даже на паузе. Ресурсы списываются при заказе. Обе стороны собирают по одному меху за 4,2 игровой секунды.</li>
+        <li>Операция открывается на паузе. Осмотритесь, отдайте приказы и закажите мехов. Нажмите «Пауза» или <kbd>Пробел</kbd>, когда будете готовы начать.</li>
+        <li>Шасси, каждое оружие и модуль добавляют время сборки. Мастерская показывает время перед заказом. Каждая площадка собирает по одному меху, ресурсы списываются при заказе.</li>
         <li>Мех вмещает два оружия и один модуль. Для сборки нужны шасси и хотя бы один предмет оснащения. Каждое оружие стреляет со своей дальностью и перезарядкой.</li>
         <li>Кнопки скорости меняют темп всей игры. Уровень 1 — 0,5×, уровень 2 — 1×, уровень 3 — 2×. Таймеры показывают игровое время.</li>
-        <li>Клавиши <kbd>1</kbd>–<kbd>8</kbd> выбирают меха, <kbd>G</kbd> выбирает весь отряд, <kbd>F</kbd> добавляет заказ в очередь, <kbd>Пробел</kbd> ставит игру на паузу.</li>
+        <li>Клавиши <kbd>1</kbd>–<kbd>8</kbd> выбирают меха, <kbd>G</kbd> выбирает весь отряд, <kbd>F</kbd> добавляет заказ в очередь, <kbd>Пробел</kbd> переключает паузу.</li>
       </ul>
     </div>
   </dialog>
