@@ -159,8 +159,9 @@ button:disabled { opacity: .47; }
   background: #101d2c;
   box-shadow: 0 16px 36px #05091077;
 }
-.battlefield canvas { display: block; width: 100%; height: 100%; outline-offset: -3px; touch-action: manipulation; }
+.battlefield canvas { display: block; width: 100%; height: 100%; outline-offset: -3px; touch-action: none; cursor: grab; }
 .battlefield canvas.aiming { cursor: crosshair; }
+.battlefield canvas.dragging { cursor: grabbing; }
 .field-header, .field-bottom {
   position: absolute;
   z-index: 1;
@@ -213,6 +214,7 @@ button:disabled { opacity: .47; }
   gap: 5px;
 }
 .zoom-tools button { min-width: 36px; min-height: 34px; font-size: 20px; color: #cfe5ea; background: #152634e8; }
+#zoom-overview { min-width: 56px; font: 650 12px/1.2 var(--mono); }
 
 .console { display: grid; gap: 10px; max-height: var(--field-height); overflow: auto; scrollbar-width: thin; scrollbar-color: #3c5868 transparent; }
 .panel { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); padding: 12px 13px; min-width: 0; }
@@ -228,6 +230,17 @@ button:disabled { opacity: .47; }
 }
 .explain { margin: 7px 0 9px; color: #bed0db; line-height: 1.35; font-size: 13px; }
 .stations { display: grid; gap: 4px; }
+.industrial-sites { margin-top: 11px; }
+.industrial-sites summary {
+  color: #c7dbe5;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  line-height: 1.8;
+}
+.industrial-sites .panel-count { float: right; padding-block: 3px; }
+.industrial-sites .stations { margin-top: 5px; }
+.station.facility { border-left-color: #758a74; }
 .station, .unit {
   display: grid;
   position: relative;
@@ -301,6 +314,8 @@ kbd {
 
 .build-select { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 7px; font-size: 13px; }
 .build-select label { color: #c5d7e2; }
+.factory-select { margin-bottom: 3px; }
+.factory-select select { border-color: #487369; }
 .build-select select {
   appearance: none;
   width: 100%;
@@ -462,6 +477,12 @@ dialog::backdrop { background: #060b11bd; backdrop-filter: blur(2px); }
   .factory { grid-column: auto; }
   .screen.introduction { padding-bottom: 56px; }
   .screen-card { max-width: 290px; }
+}
+@media (max-width: 360px) {
+  .utilities { min-width: 0; flex-wrap: wrap; justify-content: flex-end; }
+  .speed-control > span { display: none; }
+  .sector, .enemy-factory { min-width: 0; }
+  .sector strong, .enemy-factory strong { font-size: 12px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; }
