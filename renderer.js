@@ -1,11 +1,11 @@
 "use strict";
 
 const FrontierView = (() => {
-  const { WIDTH, HEIGHT, FACTION, noise, clamp } = EchoSim;
+  const { WIDTH, HEIGHT, FACTION, WEAPONS, noise, clamp } = EchoSim;
   const TW = 23;
   const TH = 12;
   const MIN_ZOOM = .82;
-  const MAX_ZOOM = 3.6;
+  const MAX_ZOOM = 5.8;
   const GROUND_DENSITY = 2;
   const GROUND_LEFT = -HEIGHT * TW - 2;
   const GROUND_TOP = -TH - 2;
@@ -56,6 +56,26 @@ const FrontierView = (() => {
     ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
   }
 
+  function sparks(ctx, seed, age, duration, count, force, tint) {
+    const fade = Math.max(0, 1 - age / duration);
+    for (let i = 0; i < count; i++) {
+      const angle = noise(seed, i, 2) * Math.PI * 2;
+      const speed = (28 + 63 * noise(seed, i, 5)) * force;
+      const vx = Math.cos(angle) * speed;
+      const vy = Math.sin(angle) * speed * .61 - 18 * force;
+      const x = vx * age;
+      const y = vy * age + 88 * age * age;
+      const tail = Math.min(.055, age);
+      ctx.globalAlpha = fade * (.56 + noise(seed, i, 7) * .44);
+      line(ctx, [[x - vx * tail, y - (vy + 176 * age) * tail], [x, y]],
+        i % 3 === 0 ? "#fff4d2" : tint, .7 + force * .46);
+    }
+  }
+
+  function turretMuzzle(angle) {
+    return [14 * Math.cos(angle), -16 + 8 * Math.sin(angle)];
+  }
+
   function box(ctx, x, y, w, d, height, top, east, west) {
     const z = y - height;
     area(ctx, [[x + w, z], [x, z + d], [x, y + d], [x + w, y]], east, "#0f1927");
@@ -78,6 +98,7 @@ const FrontierView = (() => {
       this.lastDraw = null;
       this.hover = null;
       this.marker = null;
+      this.followedId = null;
       this.reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       this.observer = new ResizeObserver(() => this.resize());
       this.observer.observe(canvas);
@@ -123,6 +144,7 @@ const FrontierView = (() => {
     }
 
     zoomAt(factor, screen) {
+      this.followedId = null;
       const zoom = clamp(factor, MIN_ZOOM, MAX_ZOOM);
       const x = screen.x - this.width / 2;
       const y = screen.y - this.height * .505;
@@ -132,12 +154,19 @@ const FrontierView = (() => {
     }
 
     overview() {
+      this.followedId = null;
       this.zoomTo(1, MAP_CENTER);
     }
 
     panBy(x, y) {
+      this.followedId = null;
       const delta = isoOffset(x, y, this.fit * this.zoom);
       this.zoomTo(this.zoom, { x: this.center.x - delta.x, y: this.center.y - delta.y });
+    }
+
+    follow(unit) {
+      this.followedId = unit.id;
+      this.zoomTo(Math.max(this.zoom, 3.7, 2.15 / this.fit), unit);
     }
 
     updateCamera(mix) {
@@ -501,7 +530,7 @@ const FrontierView = (() => {
       box(ctx, 0, 0, 13, 6, 8, "#54798a", "#38535e", "#4b6974");
       box(ctx, 0, -7, 7, 4, 8, tint, "#527574", "#689487");
       const direction = turret.direction ?? (turret.faction === FACTION.ally ? -.65 : 2.49);
-      line(ctx, [[0, -16], [14 * Math.cos(direction), -16 + 8 * Math.sin(direction)]], tint, 3);
+      line(ctx, [[0, -16], turretMuzzle(direction)], tint, 3);
       ctx.restore();
     }
 
@@ -512,23 +541,58 @@ const FrontierView = (() => {
       ctx.fillRect(x - width / 2, y, width * ratio, 2);
     }
 
-    drawMech(ctx, mech, chosen) {
+    drawMech(ctx, mech, chosen, time) {
       const p = this.project(mech.x, mech.y);
       const s = this.scale;
       const tint = POLARITY(mech.faction);
       const profile = MechArt.profile(mech.chassisId);
       const [width, depth] = profile.shadow.map((size) => size * s);
-      ellipse(ctx, p.x + 2 * s, p.y + 2 * s, width, depth, "#080d1980");
-      if (chosen || this.hover === mech.id) {
+      ellipse(ctx, p.x + 4.3 * s, p.y + 2.4 * s, width * 1.17, depth, "#090d193b");
+      ellipse(ctx, p.x + 1.9 * s, p.y + s, width * .88, depth * .82, "#080b17a1");
+      if (chosen || this.hover === mech.id || this.followedId === mech.id) {
         ellipse(ctx, p.x, p.y + s, width + 2, depth + 2, tint + "16", tint + (chosen ? "e3" : "a0"), 1.35);
       }
-      MechArt.draw(ctx, mech, p.x, p.y, s, this.reduced);
-      if (mech.hitAge < .11 && !this.reduced) {
-        luminescence(ctx, p.x, p.y - profile.hud * s * .52, Math.max(4, 11 * s), "#ffcf9e99", "#ffb17a00");
+      const detailed = s * this.dpr >= 1.25;
+      const kicks = mech.weaponIds.map((id, slot) => {
+        if (id === null || this.reduced) return 0;
+        const recovery = WEAPONS[id].cycle - mech.weaponCooldowns[slot];
+        return recovery < .068 ? 1 : recovery < .145 ? .45 : 0;
+      });
+      MechArt.draw(ctx, mech, p.x, p.y, s, { still: this.reduced, kicks, detailed });
+      if (mech.hitAge < .12 && !this.reduced) {
+        ctx.save();
+        ctx.globalAlpha = (1 - mech.hitAge / .12) * .85;
+        luminescence(ctx, p.x, p.y - profile.hud * s * .49, Math.max(4, 15 * s), "#ffce9fa9", "#ff9d6e00");
+        ctx.restore();
+      }
+      if (detailed && !this.reduced && mech.hp < mech.hull * .34) {
+        ctx.save();
+        const seed = Number(mech.id.slice(5));
+        for (let i = 0; i < 3; i++) {
+          const phase = (time * .81 + i / 3 + noise(seed, 2)) % 1;
+          const drift = Math.sin(seed + i) * phase * 8;
+          ctx.globalAlpha = (1 - phase) * .81;
+          luminescence(ctx, p.x + drift * s, p.y - (profile.hud * .60 + phase * 21) * s,
+            (3.6 + phase * 7.3) * s, "#8a777e9e", "#422d4000");
+        }
+        ctx.restore();
       }
       if (chosen || mech.hp < mech.hull) {
         this.bar(ctx, p.x, p.y - profile.hud * s, Math.max(13, width * 1.53), mech.hp / mech.hull, tint);
       }
+    }
+
+    drawWreck(ctx, effect) {
+      const age = effect.max - effect.life;
+      if (age < .09) return;
+      const p = this.project(effect.x, effect.y);
+      const s = this.scale;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.scale(1, .64);
+      ctx.globalAlpha = Math.min(1, age * 7, effect.life / 1.4);
+      MechArt.draw(ctx, effect.wreck, 0, 0, s * .95, { detailed: s * this.dpr >= 1.25 });
+      ctx.restore();
     }
 
     drawPaths(ctx, match, selected) {
@@ -555,30 +619,179 @@ const FrontierView = (() => {
       ctx.restore();
     }
 
-    drawEffects(ctx, match, now) {
+    drawGroundEffects(ctx, match) {
+      const s = this.scale;
       for (const effect of match.effects) {
+        const { type } = effect;
+        if (type === "shot" || (type === "dust" && (this.reduced || s < .8))) continue;
         const p = this.project(effect.x, effect.y);
-        const s = this.scale;
+        const margin = 70 * s;
+        if (p.x < -margin || p.x > this.width + margin || p.y < -margin || p.y > this.height + margin) continue;
         const fade = effect.life / effect.max;
-        const tint = POLARITY(effect.faction);
+        const age = 1 - fade;
         ctx.save();
-        ctx.globalAlpha = Math.min(1, fade * 1.4);
-        if (effect.type === "shot") {
-          const to = this.project(effect.tx, effect.ty);
-          const [offsetX, offsetY] = effect.mech ? MechArt.muzzle(effect.mech, this.reduced) : [0, -effect.high];
-          const targetHeight = effect.targetChassis === undefined ? effect.targetHigh : MechArt.profile(effect.targetChassis).hud * .43;
-          const start = [p.x + offsetX * s, p.y + offsetY * s];
-          const end = [to.x, to.y - targetHeight * s];
-          line(ctx, [start, end], effect.color + "70", 4.3 * s);
-          line(ctx, [start, end], effect.color, Math.max(.7, 1.55 * s));
-          luminescence(ctx, start[0], start[1], Math.max(3, 8 * s), effect.color + "a0", effect.color + "00");
-          luminescence(ctx, end[0], end[1], Math.max(4, 13 * s), effect.color + "e8", effect.color + "00");
+        ctx.translate(p.x, p.y);
+        ctx.scale(s, s);
+        if (type === "dust") {
+          ctx.globalAlpha = fade * .66;
+          const radius = (5 + age * 12) * effect.size;
+          const drift = 11 * (noise(effect.seed, 0) - .5) * age;
+          luminescence(ctx, drift, age * -3, radius, "#cba6868c", "#a37a6000");
+          luminescence(ctx, drift - 5, age * -1.5, radius * .74, "#d9b89776", "#aa806400");
+        } else if (type === "burst") {
+          ctx.globalAlpha = Math.min(1, effect.life / 2);
+          ellipse(ctx, 0, 2, 22 * effect.size, 9 * effect.size, "#100c17ac");
+          ellipse(ctx, 1, 1, 13 * effect.size, 6 * effect.size, "#160e14cc");
+          if (age < .08) {
+            ctx.globalAlpha = .62 * (1 - age / .08);
+            const wave = (10 + age * 350) * effect.size;
+            luminescence(ctx, 0, 0, wave, "#ffbc7687", "#ff7b4100");
+            ellipse(ctx, 0, 0, wave, wave * .53, null, "#ffc485", 1.1);
+          }
         } else {
-          const wave = (8 + (1 - fade) * (effect.type === "burst" ? 33 : 54)) * s;
-          luminescence(ctx, p.x, p.y, Math.max(2, wave), tint + "90", tint + "00");
-          ellipse(ctx, p.x, p.y, wave, wave * .52, null, tint, 1.7 * s);
+          const tint = POLARITY(effect.faction);
+          const wave = 8 + age * 54;
+          ctx.globalAlpha = fade;
+          luminescence(ctx, 0, 0, wave, tint + "74", tint + "00");
+          ellipse(ctx, 0, 0, wave, wave * .52, null, tint, 1.5);
         }
         ctx.restore();
+      }
+    }
+
+    drawShot(ctx, effect, from, to, detailed) {
+      const s = this.scale;
+      const [ox, oy] = effect.mech ? MechArt.muzzle(effect.mech, this.reduced) :
+        effect.turretAngle === null ? [0, -effect.high] : turretMuzzle(effect.turretAngle);
+      const x = from.x + ox * s;
+      const y = from.y + oy * s;
+      const targetHeight = effect.targetChassis === undefined ? effect.targetHigh : MechArt.profile(effect.targetChassis).hud * .47;
+      const dx = to.x - x;
+      const dy = to.y - targetHeight * s - y;
+      const length = Math.max(.1, Math.hypot(dx, dy) / s);
+      const tint = effect.color;
+      const age = effect.max - effect.life;
+      const arc = effect.weaponId === 2;
+      const gauss = effect.weaponId === 1;
+      const travel = arc ? .024 : clamp(length / (gauss ? 1150 : 660), .055, .135);
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(s, s);
+      ctx.rotate(Math.atan2(dy, dx));
+      ctx.lineCap = "round";
+      if (age < .105) {
+        ctx.globalAlpha = (1 - age / .12) * (this.reduced ? .62 : 1);
+        const flame = gauss ? 17 : arc ? 9 : 12;
+        luminescence(ctx, 0, 0, flame + 5, tint + "dd", tint + "00");
+        area(ctx, [[-3, 0], [1, -3.7], [flame, 0], [1, 3.7]], tint, null);
+        area(ctx, [[-1, 0], [1.5, -1.5], [flame * .65, 0], [1.5, 1.5]], "#fff6df", null);
+      }
+
+      if (arc && age < .21) {
+        const phase = this.reduced ? 0 : Math.floor(age * 26);
+        const points = [[0, 0]];
+        for (let i = 1; i < 7; i++) {
+          points.push([length * i / 7, (noise(effect.seed, i, phase) - .5) * Math.min(16, length * .26)]);
+        }
+        points.push([length, 0]);
+        ctx.globalAlpha = 1 - age / .235;
+        line(ctx, points, tint + "56", 5.6);
+        line(ctx, points, tint, 2.25);
+        line(ctx, points, "#fbf0ff", .72);
+        if (detailed && !this.reduced) {
+          line(ctx, [points[2], [length * .49, -8.4], points[5], [length * .9, 5.8]], tint + "ad", 1.15);
+          line(ctx, [points[3], [length * .60, 9.1], [length * .77, 11.7]], tint + "8f", .8);
+        }
+      } else if (!arc && age < travel + .115) {
+        const power = Math.min(1, age / travel);
+        const head = Math.max(.1, length * power);
+        const tail = Math.max(0, head - length * (gauss ? .76 : .42));
+        ctx.globalAlpha = Math.min(1, 1 - (age - travel) / .12);
+        const trail = ctx.createLinearGradient(tail, 0, head, 0);
+        trail.addColorStop(0, tint + "00");
+        trail.addColorStop(.64, tint + "ba");
+        trail.addColorStop(1, "#fffcf3");
+        line(ctx, [[tail, 0], [head, 0]], tint + "4f", gauss ? 7.4 : 4.6);
+        if (gauss) {
+          line(ctx, [[tail, 0], [head, 0]], trail, 2.6);
+          if (detailed) {
+            ellipse(ctx, head, 0, 2.1, 5.35, null, tint + "a9", .9);
+            ellipse(ctx, head - 6, 0, 1.7, 4.1, null, tint + "60", .7);
+          }
+        } else {
+          line(ctx, [[tail, -1.22], [head, -1.22]], trail, 1.3);
+          line(ctx, [[tail, 1.22], [head, 1.22]], trail, 1.3);
+        }
+        luminescence(ctx, head, 0, gauss ? 6.4 : 4.5, tint + "a5", tint + "00");
+      }
+
+      const impact = age - travel;
+      if (impact >= 0 && impact < .25) {
+        ctx.translate(length, 0);
+        ctx.rotate(-Math.atan2(dy, dx));
+        ctx.globalAlpha = Math.max(0, 1 - impact / .24);
+        const ring = (5.3 + impact * 38) * (gauss ? 1.35 : 1);
+        luminescence(ctx, 0, 0, ring + 4, tint + "cc", tint + "00");
+        ellipse(ctx, 0, 0, ring, ring * .64, null, tint, 1.1);
+        if (!this.reduced) {
+          const count = detailed ? (gauss ? 13 : 8) : 4;
+          sparks(ctx, effect.seed, impact, .25, count, gauss ? 1.12 : .77, tint);
+        }
+      }
+      ctx.restore();
+    }
+
+    drawBlast(ctx, effect, p, detailed) {
+      const age = effect.max - effect.life;
+      const extent = effect.size;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.scale(this.scale * extent, this.scale * extent);
+      const clouds = this.reduced ? 2 : detailed ? 6 : 3;
+      for (let i = 0; i < clouds; i++) {
+        const drift = noise(effect.seed, i, 3) - .42;
+        const hot = Math.max(0, 1 - age * 2.5);
+        const x = drift * (13 + age * 9);
+        const y = -7 - (6 + 5 * noise(effect.seed, i)) * Math.min(3.8, age);
+        ctx.globalAlpha = Math.min(.86, effect.life / 2.5) * (i === 0 ? 1 : .56);
+        const cloud = (7 + Math.min(age, 2.8) * 4.1) * (.7 + noise(effect.seed, i, 1) * .52);
+        luminescence(ctx, x, y, cloud, hot > .3 ? "#e6a382ae" : "#787581a7", "#30263500");
+      }
+      if (age < .64) {
+        ctx.globalAlpha = 1 - age / .64;
+        const shock = 8 + 29 * Math.sqrt(age);
+        luminescence(ctx, 0, -10, shock, "#ffbd75e3", "#ff6a3700");
+        ellipse(ctx, 0, -10, shock * .73, shock * .5, null, "#ffcf9c", 1.4);
+        if (age < .23) luminescence(ctx, 0, -10, 12 + age * 44, "#fff4d7", "#ffb05d00");
+        if (!this.reduced) {
+          for (let i = 0; i < (detailed ? 5 : 2); i++) {
+            ctx.globalAlpha = 1 - age / .64;
+            const dx = (noise(effect.seed, i, 8) - .5) * age * 130;
+            const dy = -10 - noise(effect.seed, i, 9) * age * 106 + 112 * age * age;
+            const chunk = 1.7 + noise(effect.seed, i, 10) * 2.2;
+            area(ctx, [[dx - chunk, dy], [dx, dy - chunk], [dx + chunk, dy + 1], [dx - 1, dy + chunk * .6]],
+              "#ad6544", "#40262b");
+          }
+          ctx.translate(0, -10);
+          sparks(ctx, effect.seed, age, .64, detailed ? 21 : 9, 1.17, "#ffad69");
+        }
+      }
+      ctx.restore();
+    }
+
+    drawEffects(ctx, match, now) {
+      const s = this.scale;
+      const detailed = s >= 1.12;
+      const margin = 105 * s;
+      for (const effect of match.effects) {
+        if (effect.type !== "shot" && effect.type !== "burst") continue;
+        const from = this.project(effect.x, effect.y);
+        const to = effect.type === "shot" ? this.project(effect.tx, effect.ty) : from;
+        if (Math.max(from.x, to.x) < -margin || Math.min(from.x, to.x) > this.width + margin ||
+            Math.max(from.y, to.y) < -margin || Math.min(from.y, to.y) > this.height + margin) continue;
+        if (effect.type === "shot") this.drawShot(ctx, effect, from, to, detailed);
+        else this.drawBlast(ctx, effect, from, detailed);
       }
       if (this.marker && now - this.marker.time < .92) {
         const mark = this.marker;
@@ -595,18 +808,25 @@ const FrontierView = (() => {
       if (this.terrain !== match.terrain) this.refreshGround(match);
       const dt = this.lastDraw === null ? 0 : Math.max(0, now - this.lastDraw);
       this.lastDraw = now;
-      this.updateCamera(1 - Math.exp(-dt * 18));
+      if (this.followedId !== null) {
+        const unit = match.units.find((mech) => mech.id === this.followedId && mech.hp > 0);
+        if (unit) this.center = this.limitCenter(unit, this.zoom);
+        else this.followedId = null;
+      }
+      this.updateCamera(this.reduced ? 1 : 1 - Math.exp(-dt * 18));
       const ctx = this.context;
       ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
       ctx.drawImage(this.sky, 0, 0, this.width, this.height);
       this.drawOrbit(ctx, now);
       const s = this.scale;
       ctx.drawImage(this.buffer, this.ox + GROUND_LEFT * s, this.oy + GROUND_TOP * s, GROUND_WIDTH * s, GROUND_HEIGHT * s);
+      this.drawGroundEffects(ctx, match);
       this.drawPaths(ctx, match, selected);
       for (const pad of match.pads) this.drawPad(ctx, pad);
       const gates = match.sites.map((site) => ({ x: site.gate.x, y: site.gate.y, type: "gate", site }));
+      const wrecks = match.effects.filter((effect) => effect.type === "burst" && effect.wreck);
       const figures = [...this.scenery,
-        ...match.sites, ...gates, ...match.units, ...match.pads.map((pad) => pad.turret).filter((t) => t && t.hp > 0)]
+        ...match.sites, ...gates, ...wrecks, ...match.units, ...match.pads.map((pad) => pad.turret).filter((t) => t && t.hp > 0)]
         .sort((a, b) => a.x + a.y - b.x - b.y);
       for (const thing of figures) {
         const p = this.project(thing.x, thing.y);
@@ -616,7 +836,8 @@ const FrontierView = (() => {
         else if (thing.type === "factory" || thing.type === "outpost") this.drawFacility(ctx, thing, now);
         else if (thing.type === "gate") this.drawGate(ctx, thing.site);
         else if (thing.type === "turret") this.drawTurret(ctx, thing);
-        else if (thing.type === "mech") this.drawMech(ctx, thing, selected.has(thing.id));
+        else if (thing.type === "burst") this.drawWreck(ctx, thing);
+        else if (thing.type === "mech") this.drawMech(ctx, thing, selected.has(thing.id), match.time);
         else this.drawNode(ctx, thing, now);
       }
       for (const site of match.sites) {

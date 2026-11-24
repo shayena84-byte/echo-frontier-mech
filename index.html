@@ -7,11 +7,11 @@
   <meta name="description" content="Рубеж Эха — браузерная стратегия. Соберите отряд мехов, захватите станции и защитите лагерь.">
   <title>Рубеж Эха</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=10">
-  <script defer src="simulation.js?v=10"></script>
-  <script defer src="mech-art.js?v=10"></script>
-  <script defer src="renderer.js?v=10"></script>
-  <script defer src="app.js?v=10"></script>
+  <link rel="stylesheet" href="style.css?v=11">
+  <script defer src="simulation.js?v=11"></script>
+  <script defer src="mech-art.js?v=11"></script>
+  <script defer src="renderer.js?v=11"></script>
+  <script defer src="app.js?v=11"></script>
 </head>
 <body>
   <header class="command-bar">
@@ -109,7 +109,8 @@
                 <strong id="inspect-queue"></strong>
               </div>
             </div>
-            <div class="inspection-actions" id="inspect-actions" hidden>
+            <div class="inspection-actions">
+              <button class="secondary" type="button" id="inspect-follow" aria-pressed="false" hidden>Следить за мехом</button>
               <button class="secondary" type="button" id="inspect-gate">К воротам</button>
               <button class="secondary" type="button" id="inspect-attack">Атаковать</button>
             </div>
@@ -211,7 +212,7 @@
             <div class="cost" id="build-cost" aria-label="Стоимость сборки"></div>
             <p class="assembly-time" id="build-duration" hidden>Сборка <strong id="build-duration-value"></strong></p>
           </div>
-          <canvas id="mech-preview" width="216" height="128" role="img" aria-label="Внешний вид собираемого меха"></canvas>
+          <canvas id="mech-preview" width="324" height="192" role="img" aria-label="Внешний вид собираемого меха"></canvas>
         </div>
         <button class="primary build-button" type="button" id="build" disabled>Заказать меха <kbd>F</kbd></button>
         <section class="factory-queue" aria-labelledby="queue-heading">
@@ -238,6 +239,7 @@
         <li>Левый клик по меху показывает комплектацию и приказ. Клик по своему меху также выбирает его. Удерживайте <kbd>Shift</kbd>, чтобы выбрать несколько мехов.</li>
         <li>Клик по базе или заводу показывает доход, темп выпуска и очередь. На сенсорном экране для приказа используйте кнопки «К воротам» и «Атаковать» в карточке объекта.</li>
         <li>Колесо приближает карту к курсору. Перетаскивайте карту мышью или пальцем. На сенсорном экране сводите и разводите два пальца для зума. Кнопка с процентами возвращает общий вид.</li>
+        <li>«Следить за мехом» в его карточке приближает камеру и ведёт её за мехом. Нажмите кнопку ещё раз или сдвиньте карту, чтобы освободить камеру.</li>
         <li>Правый клик по земле задаёт маршрут, по воротам отправляет меха на захват, по дрону или действующему зданию Цитадели отдаёт приказ атаковать. Клик по карточке станции отправляет к её воротам.</li>
         <li>Кнопка «Захватить ближайшую точку» выбирает свободные или вражеские ворота по длине маршрута. После захвата мех идёт к следующей точке. Кнопка «Атаковать меха противника» направляет вооружённых мехов за ближайшим вражеским мехом.</li>
         <li>При групповом приказе один мех занимает ворота, остальные прикрывают его. Если он уйдёт или будет уничтожен, захват начнётся заново. Противник в воротах приостанавливает захват.</li>

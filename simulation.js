@@ -231,6 +231,7 @@ const EchoSim = (() => {
       })));
       this.units = [];
       this.effects = [];
+      this.effectSequence = 0;
       this.news = [];
       this.time = 0;
       this.nextThinking = 0;
@@ -251,6 +252,11 @@ const EchoSim = (() => {
     log(message, tone = "") {
       this.news.unshift({ message, tone, time: this.time });
       this.news.length = Math.min(9, this.news.length);
+    }
+
+    addEffect(type, point, duration, details = {}) {
+      this.effects.push({ type, x: point.x, y: point.y, life: duration, max: duration,
+        seed: ++this.effectSequence, ...details });
     }
 
     baseFor(faction) {
@@ -622,26 +628,35 @@ const EchoSim = (() => {
     fire(shooter, target, slot) {
       const isMech = shooter.type === "mech";
       if (isMech && slot === undefined) slot = shooter.weaponIds.findIndex((id) => id !== null);
-      const weapon = isMech ? WEAPONS[shooter.weaponIds[slot]] : shooter;
+      const weaponId = isMech ? shooter.weaponIds[slot] : null;
+      const weapon = isMech ? WEAPONS[weaponId] : shooter;
       if (!weapon || weapon.damage <= 0 || target.hp <= 0) return;
       if (isMech) shooter.weaponCooldowns[slot] = weapon.cycle;
       else shooter.cooldown = shooter.cycle;
       shooter.direction = Math.atan2(target.y - shooter.y, target.x - shooter.x);
       target.hp = Math.max(0, target.hp - weapon.damage);
       target.hitAge = 0;
-      this.effects.push({
-        type: "shot", x: shooter.x, y: shooter.y, tx: target.x, ty: target.y, life: 0.19, max: 0.19,
-        faction: shooter.faction, color: shooter.faction === FACTION.ally ? weapon.color || "#69f1c1" : "#ff826d",
+      const hostile = shooter.faction === FACTION.hostile;
+      const color = weaponId === 0 && hostile ? "#ff9173" : weaponId === 2 && hostile ? "#f49cf5" :
+        weapon.color || (hostile ? "#ff826d" : "#ffc47a");
+      this.addEffect("shot", shooter, .48, {
+        tx: target.x, ty: target.y, weaponId, color,
         high: shooter.type === "base" ? 24 : shooter.type === "turret" ? 14 : 11,
+        turretAngle: shooter.type === "turret" ? shooter.direction : null,
         targetHigh: target.type === "base" ? 18 : target.type === "turret" ? 11 : 7,
         mech: isMech ? {
-          chassisId: shooter.chassisId, weaponId: shooter.weaponIds[slot], slot, direction: shooter.direction,
+          chassisId: shooter.chassisId, weaponId, slot, direction: shooter.direction,
           moving: shooter.moving, foot: shooter.foot,
         } : null,
         targetChassis: target.chassisId,
       });
       if (target.hp > 0) return;
-      this.effects.push({ type: "burst", x: target.x, y: target.y, life: 0.65, max: 0.65, faction: target.faction });
+      const wreck = target.type === "mech" ? {
+        chassisId: target.chassisId, weaponIds: target.weaponIds, kitId: target.kitId,
+        faction: target.faction, direction: target.direction + .44, wreck: true,
+      } : null;
+      const size = target.type === "base" ? 1.7 : target.chassisId === 2 ? 1.27 : 1;
+      this.addEffect("burst", target, 6.5, { size, wreck, color });
       if (target.type === "mech") {
         const bank = this.baseFor(shooter.faction).bank;
         bank[0] += 14;
@@ -724,7 +739,16 @@ const EchoSim = (() => {
       unit.x += dx * step / range;
       unit.y += dy * step / range;
       unit.direction = Math.atan2(dy, dx);
+      const lastFoot = unit.foot;
       unit.foot += dt * unit.speed * 7.5;
+      const contact = Math.floor(unit.foot / Math.PI);
+      if (contact > Math.floor(lastFoot / Math.PI)) {
+        const side = unit.chassisId === 2 ? .17 : contact % 2 === 0 ? .15 : -.15;
+        this.addEffect("dust", {
+          x: unit.x - .18 * dx / range - side * dy / range,
+          y: unit.y - .18 * dy / range + side * dx / range,
+        }, .8, { size: [.76, 1, 1.24][unit.chassisId] });
+      }
       unit.moving = true;
     }
 
@@ -759,7 +783,7 @@ const EchoSim = (() => {
         gate.progress = Math.min(1, gate.progress + dt * capturer.capture / duration);
         if (gate.progress < 1 - 1e-9) continue;
         const allied = capturer.faction === FACTION.ally;
-        this.effects.push({ type: "capture", x: gate.x, y: gate.y, life: 0.95, max: 0.95, faction: capturer.faction });
+        this.addEffect("capture", gate, .95, { faction: capturer.faction });
         if (site.type === "base") {
           gate.progress = 1;
           this.finish(capturer.faction, allied ? "Цитадель захвачена." : "Дроны захватили лагерь «Эхо».");

@@ -14,6 +14,7 @@
   const buildQueue = $("build-queue");
   const productionPicker = $("production-site");
   const pauseButton = $("pause");
+  const followButton = $("inspect-follow");
   const speedButtons = [...document.querySelectorAll(".speed-options button")];
   const speeds = [0.5, 1, 2];
   const format = new Intl.NumberFormat("ru", { maximumFractionDigits: 1 });
@@ -103,7 +104,7 @@
     if (!append) selected.clear();
     if (append && selected.has(id)) selected.delete(id);
     else selected.add(id);
-    if (center && !append && view.zoom > 1) view.zoomTo(view.zoom, unit);
+    if (center && !append && view.zoom > 1 && !view.followedId) view.zoomTo(view.zoom, unit);
     tone(455);
     showInspection(unit);
   }
@@ -181,11 +182,12 @@
     }
 
     const canAttack = !ally && (mech || (entity.type === "base" && entity.hp > 0));
-    $("inspect-actions").hidden = mech && !canAttack;
     $("inspect-gate").hidden = mech;
     $("inspect-gate").disabled = !canCommand;
     $("inspect-attack").hidden = !canAttack;
     $("inspect-attack").disabled = !canCommand || !hasArmed;
+    followButton.hidden = !mech;
+    followButton.setAttribute("aria-pressed", String(view.followedId === entity.id));
   }
 
   function selectAll() {
@@ -573,6 +575,12 @@
   $("inspect-attack").addEventListener("click", () => {
     if (inspected && command(inspected, "attack")) updatePanels();
   });
+  followButton.addEventListener("click", () => {
+    if (inspected?.type !== "mech" || inspected.hp <= 0 || !ordersAllowed()) return;
+    if (view.followedId === inspected.id) view.followedId = null;
+    else view.follow(inspected);
+    updatePanels();
+  });
   speedButtons.forEach((button, index) => button.addEventListener("click", () => setSpeed(index)));
   $("select-all").addEventListener("click", selectAll);
   $("capture-nearest").addEventListener("click", () => commandNearest("capture"));
@@ -740,7 +748,8 @@
         stepBank -= step;
       }
       if (match.winner) showEnd();
-      if (audioEnabled && now > lastShot + .19 && match.effects.some((effect) => effect.type === "shot" && effect.life > .12)) {
+      if (audioEnabled && now > lastShot + .19 &&
+          match.effects.some((effect) => effect.type === "shot" && effect.max - effect.life < .08)) {
         tone(172, .095, .028, 80);
         lastShot = now;
       }
