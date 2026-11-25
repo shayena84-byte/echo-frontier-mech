@@ -2,13 +2,15 @@
 
 (() => {
   const {
-    WIDTH, HEIGHT, MAX_MECHS, BASE_CAPTURE_SECONDS, RESOURCES, FACTION, CHASSIS, WEAPONS, KIT,
-    TURRET_COST, DEFAULT_BUILD, Match, affordable, buildCost, buildDuration, equipmentFor, clamp, nearestWalkable,
+    WIDTH, HEIGHT, MAX_MECHS, MAX_TURRETS, BASE_CAPTURE_SECONDS, RESOURCES, FACTION, CHASSIS, WEAPONS, KIT,
+    TURRET_COST, DEFAULT_BUILD, Match, affordable, buildCost, buildDuration, equipmentFor, clamp, nearestWalkable, shotStatus,
   } = EchoSim;
   const resourceNames = ["сплав", "энергия", "данные"];
   const $ = (id) => document.getElementById(id);
   const canvas = $("terrain");
-  const view = new FrontierView(canvas);
+  const minimap = $("minimap");
+  const minimapControl = $("minimap-control");
+  const view = new FrontierView(canvas, minimap);
   const manual = $("manual");
   const inspector = $("object-inspector");
   const buildQueue = $("build-queue");
@@ -44,6 +46,9 @@
   let factoryListKey = null;
   let pointerType = "";
   let mapMoved = false;
+  let attackMoveMode = false;
+  let announcedEvent = null;
+  let loggedEvent = null;
 
   const timeText = (seconds) => {
     const rounded = Math.max(0, Math.ceil(seconds));
@@ -111,6 +116,7 @@
 
   function showInspection(entity) {
     inspected = entity;
+    if (entity) toggleEventList(false);
     updatePanels();
     if (entity) inspector.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
@@ -126,6 +132,11 @@
       case "attack": {
         const target = site ?? match.entities().find(({ id }) => id === order.target);
         return target ? "Атаковать · " + target.name : "Атаковать";
+      }
+      case "attack-move": {
+        const contact = unit.engagement && match.entities().find(({ id }) => id === unit.engagement);
+        const status = contact ? "В бою" : unit.path.length ? "Атака с продвижением" : "Атака · на позиции";
+        return status + " · клетка " + (order.x + 1) + ", " + (order.y + 1);
       }
       case "capture":
         if (!site) return "Захват";
@@ -167,6 +178,13 @@
       setText("inspect-weapon-1", WEAPONS[entity.weaponIds[0]]?.name ?? "—");
       setText("inspect-weapon-2", WEAPONS[entity.weaponIds[1]]?.name ?? "—");
       setText("inspect-order", describeOrder(entity));
+      const id = entity.order.kind === "attack" ? entity.order.target : entity.engagement;
+      const target = id && match.entities().find((candidate) => candidate.id === id);
+      $("fire-line-status").hidden = !target;
+      if (target) {
+        const status = shotStatus(match.terrain, entity, target);
+        setText("inspect-fire-line", { clear: "Открыта", blocked: "Перекрыта скалой", distant: "Цель вне дальности" }[status]);
+      }
     } else {
       const active = match.productionFor(entity.faction).includes(entity);
       const paused = !simulationRunning();
@@ -207,7 +225,9 @@
       }
       return false;
     }
+    attackMoveMode = false;
     showOrder(target, kind);
+    updatePanels();
     return true;
   }
 
@@ -215,7 +235,7 @@
     const destination = kind === "capture" ? target.gate : target;
     view.marker = kind === "hold" ? null : {
       x: destination.x, y: destination.y, time: performance.now() / 1000,
-      faction: kind === "attack" ? FACTION.hostile : FACTION.ally,
+      faction: kind === "attack" ? FACTION.hostile : FACTION.ally, kind,
     };
     tone(kind === "attack" ? 365 : 620, .14, .045, 470);
   }
@@ -225,10 +245,12 @@
     const capture = kind === "capture";
     const target = capture ? match.captureNearest([...selected]) : match.attackNearestMech([...selected]);
     if (target) {
+      attackMoveMode = false;
       showOrder(target, kind);
-      match.log(capture ? "Приказ на захват · " + target.name : "Приказ атаковать · " + target.name + ".");
+      match.log(capture ? "Приказ на захват · " + target.name : "Приказ атаковать · " + target.name + ".",
+        "ally", capture ? target.gate : target);
     } else if (capture) {
-      match.log("До свободных или вражеских ворот нет маршрута.");
+      match.log("Нет доступных ворот для нового приказа.");
     }
     updatePanels();
   }
@@ -250,6 +272,8 @@
       productionPicker.value = match.bases[0].id;
       setSpeed(0);
     }
+    attackMoveMode = false;
+    toggleEventList(false);
     inspected = null;
     phase = "paused";
     stepBank = 0;
@@ -460,8 +484,54 @@
     showGateProgress(button, site.gate);
   }
 
+  function toggleEventList(open) {
+    $("event-list").hidden = !open;
+    $("event-toggle").setAttribute("aria-expanded", String(open));
+  }
+
+  function focusEvent(event) {
+    if (!event?.point) return;
+    view.focusSector(event.point);
+    toggleEventList(false);
+    canvas.focus({ preventScroll: true });
+    updatePanels();
+  }
+
+  function updateNews() {
+    const recent = match.news[0];
+    const alert = match.news.find((event) => event.important && match.time - event.time <= 8);
+    const event = alert ?? recent;
+    if (announcedEvent !== event) {
+      announcedEvent = event;
+      setText("event-text", event.message);
+      $("event-dot").className = event.tone;
+      $("event-focus").disabled = !event.point;
+      $("event-focus").title = event.point ? "Показать на карте" : "";
+      $("event-focus").classList.toggle("important", !!alert);
+    }
+    const list = $("event-list");
+    if (list.hidden || loggedEvent === recent) return;
+    loggedEvent = recent;
+    const focused = document.activeElement?.dataset.event;
+    list.replaceChildren(...match.news.map((entry) => {
+      const row = document.createElement("li");
+      const button = document.createElement("button");
+      const stamp = document.createElement("span");
+      stamp.textContent = timeText(entry.time);
+      stamp.className = "event-time";
+      button.type = "button";
+      button.className = entry.important ? "important" : "";
+      button.dataset.event = entry.id;
+      button.disabled = !entry.point;
+      button.append(stamp, entry.message);
+      button.addEventListener("click", () => focusEvent(entry));
+      row.append(button);
+      return row;
+    }));
+    if (focused) [...list.querySelectorAll("button")].find((item) => item.dataset.event === focused)?.focus({ preventScroll: true });
+  }
+
   function updatePanels() {
-    const running = simulationRunning();
     const canOrder = ordersAllowed();
     const paused = phase === "paused";
     const allies = match.allies();
@@ -481,9 +551,7 @@
     setText("enemy-factory-queue", enemyJobs ? "Заказов · " + enemyJobs : enemySites.length ? "Очередь пуста" : "Выпуск остановлен");
     $("enemy-factory-eta").hidden = !Number.isFinite(enemyEta);
     if (Number.isFinite(enemyEta)) setText("enemy-factory-eta", (paused ? "Пауза · " : "Сборка · ") + buildEta(enemyEta));
-    const event = match.news[0];
-    setText("event-text", event.message);
-    $("event-dot").className = event.tone;
+    updateNews();
 
     const controlled = match.nodes.filter((node) => node.faction === FACTION.ally).length;
     setText("node-count", controlled + " / " + match.nodes.length);
@@ -513,6 +581,10 @@
     $("capture-nearest").disabled = !canCommand;
     $("attack-mech").disabled = !canCommand || !hasArmed || !hasTarget;
     $("attack-mech").title = !hasArmed ? "Выберите меха с оружием" : !hasTarget ? "На поле нет вражеских мехов" : "Преследовать ближайшего вражеского меха";
+    if (!canCommand) attackMoveMode = false;
+    $("attack-move").disabled = !canCommand || !hasArmed;
+    $("attack-move").setAttribute("aria-pressed", String(attackMoveMode));
+    $("attack-move-hint").hidden = !attackMoveMode;
     $("hold").disabled = !canCommand;
     $("return-base").disabled = !canCommand || !match.repairSites(FACTION.ally).length;
     pauseButton.disabled = phase === "briefing" || phase === "ended";
@@ -547,11 +619,16 @@
     setText("factory-state", (allies.length + match.queuedCount(FACTION.ally)) + " / " + MAX_MECHS + " мест");
     $("build").disabled = !canOrder || !match.canBuild(design, FACTION.ally, workshop);
     updateBuildQueue(workshop?.queue ?? [], paused ? "Пауза" : "Сборка");
-    const freeSocket = match.freePad();
-    setText("turret", freeSocket ? "Турель «Дозор» · " + TURRET_COST.join(" / ") : "Турели развёрнуты");
-    $("turret").title = TURRET_COST.map((value, i) => value + " · " + resourceNames[i]).join(", ");
-    $("turret").disabled = !running || base.hp <= 0 || !freeSocket || !affordable(bank, TURRET_COST);
+    const turrets = match.turretsFor(FACTION.ally).length;
+    const freeSocket = workshop && match.freePad(FACTION.ally, workshop);
+    const turretStatus = !workshop || workshop.type === "factory" ? "Площадки для турелей есть у баз" :
+      !freeSocket ? "Площадки базы заняты" : turrets >= MAX_TURRETS ? "Достигнут лимит турелей" : workshop.name;
+    setText("turret", "Турель «Дозор» · " + TURRET_COST.join(" / "));
+    setText("turret-status", turretStatus + " · " + turrets + " / " + MAX_TURRETS);
+    $("turret").title = turretStatus + " · " + TURRET_COST.map((value, i) => value + " " + resourceNames[i]).join(", ");
+    $("turret").disabled = !canOrder || !freeSocket || turrets >= MAX_TURRETS || !affordable(bank, TURRET_COST);
     canvas.classList.toggle("aiming", canOrder && selected.size > 0);
+    canvas.classList.toggle("attack-aim", attackMoveMode);
     updateInspection(canCommand, hasArmed);
   }
 
@@ -586,6 +663,13 @@
   $("select-all").addEventListener("click", selectAll);
   $("capture-nearest").addEventListener("click", () => commandNearest("capture"));
   $("attack-mech").addEventListener("click", () => commandNearest("attack"));
+  function toggleAttackMove() {
+    if ($("attack-move").disabled) return;
+    attackMoveMode = !attackMoveMode;
+    canvas.focus({ preventScroll: true });
+    updatePanels();
+  }
+  $("attack-move").addEventListener("click", toggleAttackMove);
   $("hold").addEventListener("click", () => command({}, "hold"));
   $("return-base").addEventListener("click", () => {
     if (!ordersAllowed() || !match.returnForRepairs([...selected])) return;
@@ -596,10 +680,29 @@
   $("build").addEventListener("click", buildMech);
   productionPicker.addEventListener("change", updatePanels);
   $("turret").addEventListener("click", () => {
-    if (simulationRunning() && match.requestTurret()) {
+    const workshop = match.productionFor(FACTION.ally).find(({ id }) => id === productionPicker.value);
+    if (ordersAllowed() && workshop && match.requestTurret(FACTION.ally, workshop)) {
       tone(260, .22, .06, 520);
       updatePanels();
     }
+  });
+  $("event-focus").addEventListener("click", () => focusEvent(announcedEvent));
+  $("event-toggle").addEventListener("click", () => {
+    const open = $("event-list").hidden;
+    if (open) inspected = null;
+    toggleEventList(open);
+    updatePanels();
+  });
+  minimapControl.addEventListener("click", (event) => {
+    view.focusSector(event.detail === 0 ? view.center : view.minimapPosition(event));
+    updatePanels();
+  });
+  minimapControl.addEventListener("keydown", (event) => {
+    const delta = { ArrowLeft: [0, 7], ArrowRight: [0, -7], ArrowUp: [7, 0], ArrowDown: [-7, 0] }[event.code];
+    if (!delta) return;
+    event.preventDefault();
+    view.focusSector({ x: view.center.x + delta[0], y: view.center.y + delta[1] });
+    updatePanels();
   });
   $("help").addEventListener("click", () => { manual.showModal(); updatePanels(); });
   $("close-help").addEventListener("click", () => manual.close());
@@ -689,6 +792,7 @@
   canvas.addEventListener("pointerleave", () => { view.hover = null; });
 
   function commandOnMap(screen) {
+    if (attackMoveMode) return attackMoveOnMap(screen);
     const target = view.hitTest(match, screen, isOrderTarget);
     if (target?.type === "mech" || target?.type === "turret") return command(target, "attack");
     const site = view.hitTestGate(match, screen);
@@ -696,16 +800,28 @@
     if (target) return command(target, target.type === "base" && target.faction === FACTION.hostile && target.hp > 0 ?
       "attack" : "capture");
 
+    const point = groundPoint(screen);
+    return point ? command(point) : false;
+  }
+
+  function groundPoint(screen) {
     const point = view.unproject(screen.x, screen.y);
-    if (point.x >= -.65 && point.y >= -.65 && point.x <= WIDTH - .35 && point.y <= HEIGHT - .35) {
-      return command(nearestWalkable(match.terrain, point));
-    }
-    return false;
+    return point.x >= -.65 && point.y >= -.65 && point.x <= WIDTH - .35 && point.y <= HEIGHT - .35 ?
+      nearestWalkable(match.terrain, point) : null;
+  }
+
+  function attackMoveOnMap(screen) {
+    const point = groundPoint(screen);
+    return point ? command(point, "attack-move") : false;
   }
 
   canvas.addEventListener("click", (event) => {
     if (!ordersAllowed() || mapMoved) return;
     const screen = view.position(event);
+    if (attackMoveMode) {
+      attackMoveOnMap(screen);
+      return;
+    }
     const target = view.hitTest(match, screen, (entity) => entity.type === "mech" || !!entity.rates);
     if (target && isFriendlyMech(target)) selectUnit(target.id, event.shiftKey);
     else if (target) showInspection(target);
@@ -720,6 +836,14 @@
   window.addEventListener("keydown", (event) => {
     if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || manual.open ||
         event.target.closest?.("input, select, textarea")) return;
+    if (event.code === "Escape" && (attackMoveMode || !$("event-list").hidden)) {
+      event.preventDefault();
+      attackMoveMode = false;
+      toggleEventList(false);
+      canvas.focus({ preventScroll: true });
+      updatePanels();
+      return;
+    }
     if (event.code === "Escape" && inspected) {
       event.preventDefault();
       showInspection(null);
@@ -742,6 +866,7 @@
     if (!ordersAllowed()) return;
     if (event.code === "KeyG") selectAll();
     if (event.code === "KeyF") buildMech();
+    if (event.code === "KeyA") toggleAttackMove();
     if (/^Digit[1-8]$/.test(event.code)) {
       const unit = match.allies()[Number(event.code.at(-1)) - 1];
       if (unit) selectUnit(unit.id, event.shiftKey, true);

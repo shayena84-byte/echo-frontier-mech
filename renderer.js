@@ -1,7 +1,7 @@
 "use strict";
 
 const FrontierView = (() => {
-  const { WIDTH, HEIGHT, FACTION, WEAPONS, noise, clamp } = EchoSim;
+  const { WIDTH, HEIGHT, FACTION, WEAPONS, noise, clamp, distance, shotStatus } = EchoSim;
   const TW = 23;
   const TH = 12;
   const MIN_ZOOM = .82;
@@ -14,6 +14,7 @@ const FrontierView = (() => {
   const STATION_TAG_FONT = "600 11px system-ui, sans-serif";
   const COLORS = { ally: "#73f0c5", hostile: "#ff896f", neutral: "#9ed8fa" };
   const MAP_CENTER = { x: (WIDTH - 1) / 2, y: (HEIGHT - 1) / 2 };
+  const MINIMAP_MARGIN = 7;
   const POLARITY = (faction) => faction === FACTION.ally ? COLORS.ally :
     faction === FACTION.hostile ? COLORS.hostile : COLORS.neutral;
 
@@ -84,9 +85,15 @@ const FrontierView = (() => {
   }
 
   class View {
-    constructor(canvas) {
+    constructor(canvas, minimap = null) {
       this.canvas = canvas;
       this.context = canvas.getContext("2d");
+      this.minimap = minimap;
+      this.miniGround = minimap ? document.createElement("canvas") : null;
+      if (this.miniGround) {
+        this.miniGround.width = minimap.width;
+        this.miniGround.height = minimap.height;
+      }
       this.buffer = document.createElement("canvas");
       this.buffer.width = Math.ceil(GROUND_WIDTH * GROUND_DENSITY);
       this.buffer.height = Math.ceil(GROUND_HEIGHT * GROUND_DENSITY);
@@ -197,6 +204,82 @@ const FrontierView = (() => {
     position(event) {
       const rect = this.canvas.getBoundingClientRect();
       return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    }
+
+    minimapProject(x, y) {
+      const w = this.minimap.width - 2 * MINIMAP_MARGIN;
+      const h = this.minimap.height - 2 * MINIMAP_MARGIN;
+      return [MINIMAP_MARGIN + (HEIGHT - .5 - y) * w / HEIGHT,
+        MINIMAP_MARGIN + (WIDTH - .5 - x) * h / WIDTH];
+    }
+
+    minimapPosition(event) {
+      const el = this.minimap;
+      const rect = el.getBoundingClientRect();
+      const u = ((event.clientX - rect.left) * el.width / rect.width - MINIMAP_MARGIN) / (el.width - MINIMAP_MARGIN * 2);
+      const v = ((event.clientY - rect.top) * el.height / rect.height - MINIMAP_MARGIN) / (el.height - MINIMAP_MARGIN * 2);
+      return { x: clamp(WIDTH - .5 - v * WIDTH, 0, WIDTH - 1), y: clamp(HEIGHT - .5 - u * HEIGHT, 0, HEIGHT - 1) };
+    }
+
+    refreshMinimap(terrain) {
+      if (!this.miniGround) return;
+      const { width, height } = this.miniGround;
+      const ctx = this.miniGround.getContext("2d");
+      const cw = (width - MINIMAP_MARGIN * 2) / HEIGHT;
+      const ch = (height - MINIMAP_MARGIN * 2) / WIDTH;
+      ctx.fillStyle = "#0b1621";
+      ctx.fillRect(0, 0, width, height);
+      ctx.fillStyle = "#203544";
+      ctx.fillRect(MINIMAP_MARGIN, MINIMAP_MARGIN, cw * HEIGHT, ch * WIDTH);
+      for (const tile of terrain) {
+        if (!tile.blocked && tile.kind !== "crystal") continue;
+        const [x, y] = this.minimapProject(tile.x, tile.y);
+        ctx.fillStyle = tile.kind === "ridge" ? "#587285" : tile.kind === "fissure" ? "#9b5a54" : "#36655d";
+        ctx.fillRect(x - cw / 2, y - ch / 2, cw + .15, ch + .15);
+      }
+    }
+
+    drawMinimap(match, selected) {
+      if (!this.minimap) return;
+      const { width, height } = this.minimap;
+      const ctx = this.minimap.getContext("2d");
+      ctx.drawImage(this.miniGround, 0, 0);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(MINIMAP_MARGIN, MINIMAP_MARGIN, width - 2 * MINIMAP_MARGIN, height - 2 * MINIMAP_MARGIN);
+      ctx.clip();
+      if (this.zoom > 1.02) {
+        const frame = [[0, 0], [this.width, 0], [this.width, this.height], [0, this.height]].map(([u, v]) => {
+          const point = this.unproject(u, v);
+          return this.minimapProject(point.x, point.y);
+        });
+        ctx.lineWidth = 1.4;
+        area(ctx, frame, "#a4d6e91b", "#bdeaffb6");
+      }
+      for (const site of match.sites) {
+        const [x, y] = this.minimapProject(site.x, site.y);
+        const shade = POLARITY(site.faction);
+        if (site.type === "base") {
+          area(ctx, [[x, y - 6], [x + 6, y], [x, y + 6], [x - 6, y]], shade, "#101924");
+        } else if (site.type) {
+          ctx.fillStyle = shade;
+          ctx.fillRect(x - 3, y - 3, 6, 6);
+        } else ellipse(ctx, x, y, 2.25, 2.25, shade);
+        if (site.gate.progress && site.gate.faction !== site.faction) {
+          ellipse(ctx, x, y, 6.5, 6.5, null, POLARITY(site.gate.faction) + "d0", 1.3);
+        }
+      }
+      for (const mech of match.units) {
+        const [x, y] = this.minimapProject(mech.x, mech.y);
+        ellipse(ctx, x, y, 2, 2, POLARITY(mech.faction), selected.has(mech.id) ? "#eaffe8" : "#101924", 1);
+      }
+      for (const event of match.news) {
+        if (!event.important || !event.point || match.time - event.time > 7) continue;
+        const [x, y] = this.minimapProject(event.point.x, event.point.y);
+        ctx.globalAlpha = 1 - (match.time - event.time) / 8;
+        ellipse(ctx, x, y, 8.5, 8.5, null, event.tone === "hostile" ? "#ffbd83" : "#a7ffe2", 1.55);
+      }
+      ctx.restore();
     }
 
     hitTest(match, screen, accepts = () => true) {
@@ -391,6 +474,7 @@ const FrontierView = (() => {
       for (const tile of terrain) this.drawGround(ctx, tile);
       this.scenery = terrain.filter((tile) => tile.kind !== "dust" && tile.kind !== "basalt");
       this.terrain = match.terrain;
+      this.refreshMinimap(terrain);
     }
 
     drawSiteTags(ctx, match) {
@@ -624,12 +708,40 @@ const FrontierView = (() => {
           return [p.x, p.y];
         });
         ctx.setLineDash([4, 5]);
-        line(ctx, points, target ? "#ff896fce" : "#8ff2ca9c", 1.35);
+        line(ctx, points, target ? "#ff896fce" : mech.order.kind === "attack-move" ? "#ffc984ce" : "#8ff2ca9c", 1.35);
         if (target) {
           const p = this.project(target.x, target.y);
           const radius = Math.max(9, (target.type === "base" ? 38 : 21) * this.scale);
           ctx.setLineDash([]);
           ellipse(ctx, p.x, p.y, radius, radius * .52, null, "#ff896f", 1.4);
+        }
+      }
+      ctx.restore();
+    }
+
+    drawFireLines(ctx, match, selected) {
+      const entities = match.entities();
+      ctx.save();
+      for (const unit of match.allies()) {
+        if (!unit.range || !selected.has(unit.id)) continue;
+        const ordered = unit.order.kind === "attack" ? unit.order.target : unit.engagement;
+        const target = entities.find(({ id, faction }) => faction !== unit.faction && id === this.hover) ??
+          entities.find(({ id }) => id === ordered);
+        if (!target || distance(unit, target) > 10) continue;
+        const quality = shotStatus(match.terrain, unit, target);
+        const shade = { clear: "#9bffe2cd", blocked: "#ffb276e8", distant: "#bdd6e38a" }[quality];
+        const p = this.project(unit.x, unit.y);
+        const q = this.project(target.x, target.y);
+        const from = [p.x, p.y - MechArt.profile(unit.chassisId).hud * .46 * this.scale];
+        const height = target.type === "mech" ? MechArt.profile(target.chassisId).hud * .45 : 19;
+        const to = [q.x, q.y - height * this.scale];
+        ctx.setLineDash(quality === "clear" ? [] : quality === "blocked" ? [3, 4] : [1, 6]);
+        line(ctx, [from, to], shade, 1.35);
+        if (quality === "blocked") {
+          const x = (from[0] + to[0]) / 2;
+          const y = (from[1] + to[1]) / 2;
+          ctx.setLineDash([]);
+          line(ctx, [[x - 3, y - 4], [x + 3, y + 4]], shade, 2);
         }
       }
       ctx.restore();
@@ -815,7 +927,8 @@ const FrontierView = (() => {
         const a = (12 + (now - mark.time) * 22) * this.scale;
         ctx.save();
         ctx.globalAlpha = 1 - (now - mark.time) / .92;
-        ellipse(ctx, p.x, p.y, a, a * .52, null, mark.faction === FACTION.hostile ? COLORS.hostile : COLORS.ally, 1.4);
+        const tint = mark.kind === "attack-move" ? "#ffd297" : POLARITY(mark.faction);
+        ellipse(ctx, p.x, p.y, a, a * .52, null, tint, 1.4);
         ctx.restore();
       }
     }
@@ -856,8 +969,10 @@ const FrontierView = (() => {
         else if (thing.type === "mech") this.drawMech(ctx, thing, selected.has(thing.id), match.time);
         else this.drawNode(ctx, thing, now);
       }
+      this.drawFireLines(ctx, match, selected);
       this.drawSiteTags(ctx, match);
       this.drawEffects(ctx, match, now);
+      this.drawMinimap(match, selected);
     }
   }
 

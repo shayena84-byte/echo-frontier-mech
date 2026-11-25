@@ -7,11 +7,11 @@
   <meta name="description" content="Рубеж Эха — браузерная стратегия. Соберите отряд мехов, захватите станции и защитите лагерь.">
   <title>Рубеж Эха</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=12">
-  <script defer src="simulation.js?v=12"></script>
-  <script defer src="mech-art.js?v=12"></script>
-  <script defer src="renderer.js?v=12"></script>
-  <script defer src="app.js?v=12"></script>
+  <link rel="stylesheet" href="style.css?v=13">
+  <script defer src="simulation.js?v=13"></script>
+  <script defer src="mech-art.js?v=13"></script>
+  <script defer src="renderer.js?v=13"></script>
+  <script defer src="app.js?v=13"></script>
 </head>
 <body>
   <header class="command-bar">
@@ -69,7 +69,12 @@
           <small id="enemy-factory-eta" hidden></small>
         </div>
       </div>
+      <div class="attack-move-hint" id="attack-move-hint" role="status" hidden>Укажите точку атаки на карте · Esc отменяет</div>
       <div class="map-controls">
+        <button class="minimap-control" type="button" id="minimap-control" aria-label="Мини-карта, клик или стрелки перемещают камеру"
+          title="Нажмите на участок мини-карты, чтобы перейти к нему">
+          <canvas id="minimap" width="368" height="174" aria-hidden="true"></canvas>
+        </button>
         <div class="sector-tools" role="group" aria-label="Участки карты">
           <button class="secondary" type="button" id="sector-camp">Лагерь</button>
           <button class="secondary" type="button" id="sector-center">Центр</button>
@@ -99,6 +104,7 @@
                 <div><dt>Оружие 2</dt><dd id="inspect-weapon-2"></dd></div>
               </dl>
               <div class="inspection-line"><span>Приказ</span><strong id="inspect-order"></strong></div>
+              <div class="inspection-line" id="fire-line-status" hidden><span>Линия огня</span><strong id="inspect-fire-line"></strong></div>
             </div>
             <div id="inspection-site" hidden>
               <h3 id="inspect-income-label"></h3>
@@ -122,7 +128,15 @@
               <button class="secondary" type="button" id="inspect-attack">Атаковать</button>
             </div>
           </section>
-          <div class="field-log" aria-live="polite"><span id="event-dot"></span><span id="event-text">Связь с лагерем «Эхо» установлена.</span></div>
+          <div class="event-panel">
+            <ol class="event-list" id="event-list" aria-label="Последние события" hidden></ol>
+            <div class="field-log">
+              <button class="event-message" type="button" id="event-focus">
+                <span id="event-dot" aria-hidden="true"></span><span id="event-text" aria-live="polite">Связь с лагерем «Эхо» установлена.</span>
+              </button>
+              <button class="secondary" type="button" id="event-toggle" aria-expanded="false" aria-controls="event-list">Журнал</button>
+            </div>
+          </div>
         </div>
         <div class="legend" aria-label="Обозначения на карте">
           <span class="legend-ally">Отряд</span><span class="legend-neutral">Нейтрал.</span><span class="legend-hostile">Противник</span>
@@ -181,6 +195,7 @@
         <div class="orders" role="group" aria-label="Приказы выбранным мехам">
           <button class="secondary tactical-order" type="button" id="capture-nearest" disabled>Захватить ближайшую точку</button>
           <button class="secondary tactical-order" type="button" id="attack-mech" disabled>Атаковать меха противника</button>
+          <button class="secondary" type="button" id="attack-move" aria-keyshortcuts="A" aria-pressed="false" disabled>Атака с продвижением <kbd>A</kbd></button>
           <button class="secondary" type="button" id="hold" disabled>Удерживать</button>
           <button class="secondary" type="button" id="return-base" disabled>На ремонт</button>
         </div>
@@ -231,7 +246,8 @@
           <div class="progress" id="build-progress" aria-hidden="true" hidden><span id="build-bar"></span></div>
           <ol class="build-queue" id="build-queue"></ol>
         </section>
-        <button class="secondary turret-button" type="button" id="turret" disabled></button>
+        <button class="secondary turret-button" type="button" id="turret" aria-describedby="turret-status" disabled></button>
+        <p class="assembly-time" id="turret-status"></p>
       </section>
     </aside>
   </main>
@@ -247,12 +263,16 @@
         <li>Клик по базе или заводу показывает доход, темп выпуска и очередь. На сенсорном экране для приказа используйте кнопки «К воротам» и «Атаковать» в карточке объекта.</li>
         <li>Колесо приближает карту к курсору. Перетаскивайте карту мышью или пальцем. На сенсорном экране сводите и разводите два пальца для зума. Кнопка с процентами возвращает общий вид.</li>
         <li>Кнопки «Лагерь», «Центр» и «Цитадель» перемещают камеру к выбранному участку каньона.</li>
+        <li>Мини-карта показывает весь каньон и текущий обзор. Нажмите на участок карты или событие в журнале, чтобы перейти к нему.</li>
         <li>«Следить за мехом» в его карточке приближает камеру и ведёт её за мехом. Нажмите кнопку ещё раз или сдвиньте карту, чтобы освободить камеру.</li>
         <li>Правый клик по земле задаёт маршрут, по воротам отправляет меха на захват, по вражескому меху или действующему зданию Цитадели отдаёт приказ атаковать. Клик по карточке станции отправляет к её воротам.</li>
-        <li>Кнопка «Захватить ближайшую точку» выбирает свободные или вражеские ворота по длине маршрута. После захвата мех идёт к следующей точке. Кнопка «Атаковать меха противника» направляет вооружённых мехов за ближайшим вражеским мехом.</li>
-        <li>При групповом приказе один мех занимает ворота, остальные прикрывают его. Если он уйдёт или будет уничтожен, захват начнётся заново. Противник в воротах приостанавливает захват.</li>
+        <li>«Захватить ближайшую точку» выбирает ворота по времени пути и захвата. Одни ворота закреплены за одним мехом от стороны. После взятия объекта отряд выбирает следующую доступную точку.</li>
+        <li>При групповом захвате остальные мехи прикрывают ведущего и подхватывают его приказ, если он уйдёт или будет уничтожен. Присутствие противника в воротах приостанавливает захват.</li>
+        <li>«Атаковать меха противника» назначает ближайшую цель. Для атаки с продвижением нажмите <kbd>A</kbd> или кнопку приказа, затем укажите точку на карте. Отряд атакует по пути и возобновляет движение после боя.</li>
+        <li>Высокие скалы перекрывают огонь. Линия от выбранного меха к цели подсвечена зелёным при открытом выстреле, оранжевым пунктиром у скалы и серым за пределами дальности.</li>
         <li>Для победы удержите ворота Цитадели. Когда обстрел выводит из строя оборону и завод, один из атакующих мехов идёт к воротам. Соперник может захватить лагерь по тем же правилам.</li>
         <li>Заводы и передовые базы нейтральны до захвата. Каждая даёт половину дохода стартовой базы и собирает мехов в своей очереди. Выберите площадку в мастерской. Передовые базы также ремонтируют мехов.</li>
+        <li>Турель «Дозор» можно развернуть на паузе. Выберите свою базу в мастерской. У лагеря две позиции, у передовой базы одна. Лимит составляет четыре действующие турели на сторону.</li>
         <li>Операция открывается на паузе. Осмотритесь, отдайте приказы и закажите мехов. Нажмите «Пауза» или <kbd>Пробел</kbd>, когда будете готовы начать.</li>
         <li>Шасси, каждое оружие и модуль добавляют время сборки. Мастерская показывает время перед заказом. Каждая площадка собирает по одному меху, ресурсы списываются при заказе.</li>
         <li>Мех вмещает два оружия и один модуль. Для сборки нужны шасси и хотя бы один предмет оснащения. Каждое оружие стреляет со своей дальностью и перезарядкой.</li>

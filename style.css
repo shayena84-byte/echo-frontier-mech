@@ -260,6 +260,45 @@ button:disabled { opacity: .47; }
   white-space: nowrap;
 }
 .field-log, .legend { display: flex; align-items: center; min-height: 35px; gap: 9px; font-size: 13px; }
+.event-panel { position: relative; max-width: min(410px, 100%); pointer-events: auto; }
+.field-log { padding: 4px 5px 4px 7px; gap: 5px; }
+.event-message, .event-list button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 29px;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #ddedf4;
+  text-align: left;
+  font: inherit;
+}
+.event-message:disabled, .event-list button:disabled { opacity: 1; }
+.event-message:hover:not(:disabled), .event-list button:hover:not(:disabled) { background: #26404d; }
+.event-message.important, .event-list button.important {
+  border-color: #a5755f87;
+  background: #442d3299;
+  color: #ffceb1;
+}
+#event-toggle { min-height: 28px; padding: 3px 6px; font-size: 12px; }
+.event-list {
+  position: absolute;
+  inset: auto 0 calc(100% + 6px);
+  max-height: min(38dvh, 265px);
+  margin: 0;
+  padding: 6px;
+  overflow: auto;
+  list-style: none;
+  border: 1px solid #4b6d79;
+  border-radius: 6px;
+  background: #13232ffa;
+  box-shadow: 0 8px 24px #060e18a8;
+  font-size: 13px;
+}
+.event-list button { width: 100%; margin-bottom: 2px; }
+.event-time { color: #afc5d2; font: 650 11px var(--mono); font-variant-numeric: tabular-nums; }
 #event-dot, .legend span::before { flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: #a5c5d9; }
 #event-dot.ally, .legend .legend-ally::before { background: var(--mint); box-shadow: 0 0 9px #79efc87a; }
 #event-dot.hostile, .legend .legend-hostile::before { background: var(--rust); box-shadow: 0 0 9px #ff9c807a; }
@@ -277,6 +316,36 @@ button:disabled { opacity: .47; }
   gap: 5px;
 }
 .zoom-tools, .sector-tools { display: flex; gap: 5px; }
+.minimap-control {
+  display: block;
+  width: 184px;
+  padding: 0;
+  border: 1px solid #547180;
+  border-radius: 5px;
+  overflow: hidden;
+  background: #101d29;
+  box-shadow: 0 5px 14px #091724a8;
+  cursor: crosshair;
+}
+.minimap-control:hover { border-color: #a2d5dc; }
+#minimap { display: block; width: 100%; height: auto; }
+.attack-move-hint {
+  position: absolute;
+  z-index: 2;
+  top: 54px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100% - 24px);
+  padding: 6px 9px;
+  border: 1px solid #b98a51;
+  border-radius: 5px;
+  background: #352a29f0;
+  color: #ffda9d;
+  text-align: center;
+  pointer-events: none;
+  font-size: 12px;
+}
 .sector-tools .secondary {
   min-height: 30px;
   padding: 4px 8px;
@@ -397,6 +466,9 @@ kbd {
 .orders .secondary { min-height: 30px; font-size: 12px; }
 .orders .tactical-order { min-height: 40px; padding-inline: 6px; color: #b5f1de; }
 #attack-mech { color: #ffc2ab; }
+#attack-move { grid-column: 1 / -1; color: #ffd298; }
+#attack-move[aria-pressed="true"] { border-color: #cb9d61; background: #3e332c; }
+#terrain.attack-aim { cursor: crosshair; }
 .empty-squad { display: block; color: var(--muted); margin: 3px 0; font-size: 13px; }
 
 .build-select { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 7px; font-size: 13px; }
@@ -563,7 +635,10 @@ dialog::backdrop { background: #060b11bd; backdrop-filter: blur(2px); }
   .enemy-factory, .sector { padding: 7px 9px; }
   .pause-status { position: absolute; top: calc(100% + 5px); left: 0; }
   .map-controls { right: 8px; bottom: 53px; }
-  .battlefield:has(.inspection-card:not([hidden])) .map-controls { top: 100px; bottom: auto; }
+  .battlefield:has(.inspection-card:not([hidden]), .event-list:not([hidden])) .map-controls { top: 100px; bottom: auto; }
+  .battlefield:has(.inspection-card:not([hidden]), .event-list:not([hidden])) .minimap-control { display: none; }
+  .minimap-control { width: 150px; }
+  .attack-move-hint { top: 90px; }
   .console { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .factory { grid-column: auto; }
   .screen.introduction { padding-bottom: 56px; }
