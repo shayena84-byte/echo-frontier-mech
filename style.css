@@ -267,16 +267,26 @@ button:disabled { opacity: .47; }
 .legend span { display: inline-flex; align-items: center; gap: 5px; }
 .legend span::before { content: ""; }
 .legend .legend-neutral::before { background: var(--blue); }
-.zoom-tools {
-  display: flex;
+.map-controls {
+  display: grid;
+  justify-items: end;
   position: absolute;
   z-index: 2;
   bottom: 62px;
   right: 16px;
   gap: 5px;
 }
+.zoom-tools, .sector-tools { display: flex; gap: 5px; }
+.sector-tools .secondary {
+  min-height: 30px;
+  padding: 4px 8px;
+  border-color: #456071;
+  font-size: 12px;
+  background: #152634e8;
+}
 .zoom-tools button { min-width: 36px; min-height: 34px; font-size: 20px; color: #cfe5ea; background: #152634e8; }
 #zoom-overview { min-width: 56px; font: 650 12px/1.2 var(--mono); }
+#facilities { max-height: 172px; overflow-y: auto; scrollbar-width: thin; padding-right: 3px; }
 
 .console { display: grid; gap: 10px; max-height: var(--field-height); overflow: auto; scrollbar-width: thin; scrollbar-color: #3c5868 transparent; }
 .panel { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); padding: 12px 13px; min-width: 0; }
@@ -552,8 +562,8 @@ dialog::backdrop { background: #060b11bd; backdrop-filter: blur(2px); }
   .legend { display: none; }
   .enemy-factory, .sector { padding: 7px 9px; }
   .pause-status { position: absolute; top: calc(100% + 5px); left: 0; }
-  .zoom-tools { right: 8px; bottom: 53px; }
-  .battlefield:has(.inspection-card:not([hidden])) .zoom-tools { top: 100px; bottom: auto; }
+  .map-controls { right: 8px; bottom: 53px; }
+  .battlefield:has(.inspection-card:not([hidden])) .map-controls { top: 100px; bottom: auto; }
   .console { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .factory { grid-column: auto; }
   .screen.introduction { padding-bottom: 56px; }

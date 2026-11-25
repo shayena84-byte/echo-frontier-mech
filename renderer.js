@@ -5,12 +5,12 @@ const FrontierView = (() => {
   const TW = 23;
   const TH = 12;
   const MIN_ZOOM = .82;
-  const MAX_ZOOM = 5.8;
-  const GROUND_DENSITY = 2;
+  const MAX_ZOOM = 10.7;
   const GROUND_LEFT = -HEIGHT * TW - 2;
   const GROUND_TOP = -TH - 2;
   const GROUND_WIDTH = (WIDTH + HEIGHT) * TW + 4;
   const GROUND_HEIGHT = (WIDTH + HEIGHT) * TH + 34;
+  const GROUND_DENSITY = Math.min(2, 3600 / Math.max(GROUND_WIDTH, GROUND_HEIGHT));
   const STATION_TAG_FONT = "600 11px system-ui, sans-serif";
   const COLORS = { ally: "#73f0c5", hostile: "#ff896f", neutral: "#9ed8fa" };
   const MAP_CENTER = { x: (WIDTH - 1) / 2, y: (HEIGHT - 1) / 2 };
@@ -88,8 +88,8 @@ const FrontierView = (() => {
       this.canvas = canvas;
       this.context = canvas.getContext("2d");
       this.buffer = document.createElement("canvas");
-      this.buffer.width = GROUND_WIDTH * GROUND_DENSITY;
-      this.buffer.height = GROUND_HEIGHT * GROUND_DENSITY;
+      this.buffer.width = Math.ceil(GROUND_WIDTH * GROUND_DENSITY);
+      this.buffer.height = Math.ceil(GROUND_HEIGHT * GROUND_DENSITY);
       this.sky = document.createElement("canvas");
       this.terrain = null;
       this.zoom = 1;
@@ -99,6 +99,7 @@ const FrontierView = (() => {
       this.hover = null;
       this.marker = null;
       this.followedId = null;
+      this.siteTags = new Map();
       this.reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       this.observer = new ResizeObserver(() => this.resize());
       this.observer.observe(canvas);
@@ -158,6 +159,11 @@ const FrontierView = (() => {
       this.zoomTo(1, MAP_CENTER);
     }
 
+    focusSector(point) {
+      this.followedId = null;
+      this.zoomTo(Math.max(this.zoom, Math.min(5, 1.16 / this.fit)), point);
+    }
+
     panBy(x, y) {
       this.followedId = null;
       const delta = isoOffset(x, y, this.fit * this.zoom);
@@ -201,7 +207,10 @@ const FrontierView = (() => {
         if (!accepts(entity)) continue;
         const point = this.project(entity.x, entity.y);
         const isNode = !entity.type;
-        if (entity.gate && this.hitsSiteTag(entity, point, screen)) return entity;
+        const tag = this.siteTags.get(entity.id);
+        if (tag && screen.x >= tag.left && screen.x <= tag.right && screen.y >= tag.top && screen.y <= tag.bottom) {
+          return entity;
+        }
         const model = entity.type === "mech" ? MechArt.profile(entity.chassisId) : null;
         const z = model ? model.hud * .45 : entity.type === "base" ? 29 : isNode ? 18 : entity.gate ? 21 : 9;
         const radius = Math.max(13, (model ? model.shadow[0] + 3 : entity.gate && entity.type ? 39 : 26) * s);
@@ -209,17 +218,6 @@ const FrontierView = (() => {
         if (dist < radius && dist < best) { chosen = entity; best = dist; }
       }
       return chosen;
-    }
-
-    hitsSiteTag(site, point, screen) {
-      const y = this.siteLabelY(site, point);
-      if (screen.y < y - 7 || screen.y > y + 10) return false;
-      const ctx = this.context;
-      ctx.save();
-      ctx.font = site.type === "base" ? "700 12px system-ui, sans-serif" : STATION_TAG_FONT;
-      const halfWidth = ctx.measureText(site.label ?? site.name).width / 2 + 6;
-      ctx.restore();
-      return Math.abs(screen.x - point.x) <= halfWidth;
     }
 
     siteLabelY(site, point) {
@@ -395,18 +393,36 @@ const FrontierView = (() => {
       this.terrain = match.terrain;
     }
 
-    tag(ctx, text, x, y, tint, small = false) {
-      ctx.font = small ? STATION_TAG_FONT : "700 12px system-ui, sans-serif";
-      const w = ctx.measureText(text).width + 12;
-      ctx.fillStyle = "#0b1725e8";
-      ctx.fillRect(x - w / 2, y - 7, w, 17);
-      ctx.lineWidth = 1;
-      ctx.strokeStyle = tint + "78";
-      ctx.strokeRect(x - w / 2, y - 7, w, 17);
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillStyle = tint;
-      ctx.fillText(text, x, y + 1.2);
+    drawSiteTags(ctx, match) {
+      this.siteTags.clear();
+      const sites = [...match.bases, ...match.facilities, ...match.nodes];
+      const hovered = sites.findIndex((site) => site.id === this.hover);
+      if (hovered > 0) sites.unshift(sites.splice(hovered, 1)[0]);
+      for (const site of sites) {
+        const point = this.project(site.x, site.y);
+        const y = this.siteLabelY(site, point);
+        if (point.x < 0 || point.x > this.width || y < 5 || y > this.height - 9) continue;
+        const text = site.label ?? site.name;
+        ctx.font = site.type === "base" ? "700 12px system-ui, sans-serif" : STATION_TAG_FONT;
+        const width = ctx.measureText(text).width + 12;
+        const x = clamp(point.x, width / 2 + 2, this.width - width / 2 - 2);
+        const tag = { left: x - width / 2, right: x + width / 2, top: y - 7, bottom: y + 10 };
+        const overlap = [...this.siteTags.values()].some((other) =>
+          tag.left <= other.right + 4 && tag.right >= other.left - 4 &&
+          tag.top <= other.bottom + 2 && tag.bottom >= other.top - 2);
+        if (overlap) continue;
+        this.siteTags.set(site.id, tag);
+        const tint = POLARITY(site.faction);
+        ctx.fillStyle = "#0b1725e8";
+        ctx.fillRect(tag.left, tag.top, width, 17);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = tint + "78";
+        ctx.strokeRect(tag.left, tag.top, width, 17);
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = tint;
+        ctx.fillText(text, x, y + 1.2);
+      }
     }
 
     drawNode(ctx, node, now) {
@@ -840,10 +856,7 @@ const FrontierView = (() => {
         else if (thing.type === "mech") this.drawMech(ctx, thing, selected.has(thing.id), match.time);
         else this.drawNode(ctx, thing, now);
       }
-      for (const site of match.sites) {
-        const p = this.project(site.x, site.y);
-        this.tag(ctx, site.label ?? site.name, p.x, this.siteLabelY(site, p), POLARITY(site.faction), site.type !== "base");
-      }
+      this.drawSiteTags(ctx, match);
       this.drawEffects(ctx, match, now);
     }
   }

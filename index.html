@@ -7,11 +7,11 @@
   <meta name="description" content="Рубеж Эха — браузерная стратегия. Соберите отряд мехов, захватите станции и защитите лагерь.">
   <title>Рубеж Эха</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=11">
-  <script defer src="simulation.js?v=11"></script>
-  <script defer src="mech-art.js?v=11"></script>
-  <script defer src="renderer.js?v=11"></script>
-  <script defer src="app.js?v=11"></script>
+  <link rel="stylesheet" href="style.css?v=12">
+  <script defer src="simulation.js?v=12"></script>
+  <script defer src="mech-art.js?v=12"></script>
+  <script defer src="renderer.js?v=12"></script>
+  <script defer src="app.js?v=12"></script>
 </head>
 <body>
   <header class="command-bar">
@@ -59,20 +59,27 @@
       <canvas id="terrain" aria-label="Карта каньона. Левая кнопка показывает сведения и выбирает своего меха, правая отдаёт приказ. Колесо меняет масштаб, перетаскивание сдвигает карту." tabindex="0"></canvas>
       <div class="field-header">
         <div class="sector">
-          <span class="sector-cap">Сектор</span>
+          <span class="sector-cap" id="sector-size">37 × 81</span>
           <strong>Каньон Вектра</strong>
         </div>
         <div class="pause-status" id="pause-status" role="status" hidden>Пауза · приказы и заказы доступны</div>
         <div class="enemy-factory">
-          <span id="enemy-factory-sites">Производство дронов · 1</span>
+          <span id="enemy-factory-sites">Площадки противника · 1</span>
           <strong id="enemy-factory-queue">Очередь пуста</strong>
           <small id="enemy-factory-eta" hidden></small>
         </div>
       </div>
-      <div class="zoom-tools" aria-label="Масштаб карты">
-        <button type="button" id="zoom-out" aria-label="Уменьшить масштаб">−</button>
-        <button type="button" id="zoom-overview" aria-label="Показать всю карту" title="Показать всю карту">100%</button>
-        <button type="button" id="zoom-in" aria-label="Увеличить масштаб">+</button>
+      <div class="map-controls">
+        <div class="sector-tools" role="group" aria-label="Участки карты">
+          <button class="secondary" type="button" id="sector-camp">Лагерь</button>
+          <button class="secondary" type="button" id="sector-center">Центр</button>
+          <button class="secondary" type="button" id="sector-citadel">Цитадель</button>
+        </div>
+        <div class="zoom-tools" role="group" aria-label="Масштаб карты">
+          <button type="button" id="zoom-out" aria-label="Уменьшить масштаб">−</button>
+          <button type="button" id="zoom-overview" aria-label="Показать всю карту" title="Показать всю карту">100%</button>
+          <button type="button" id="zoom-in" aria-label="Увеличить масштаб">+</button>
+        </div>
       </div>
       <div class="field-bottom">
         <div class="field-stack">
@@ -118,7 +125,7 @@
           <div class="field-log" aria-live="polite"><span id="event-dot"></span><span id="event-text">Связь с лагерем «Эхо» установлена.</span></div>
         </div>
         <div class="legend" aria-label="Обозначения на карте">
-          <span class="legend-ally">Отряд</span><span class="legend-neutral">Нейтрал.</span><span class="legend-hostile">Дроны</span>
+          <span class="legend-ally">Отряд</span><span class="legend-neutral">Нейтрал.</span><span class="legend-hostile">Противник</span>
         </div>
       </div>
 
@@ -137,7 +144,7 @@
           <p id="end-reason"></p>
           <dl class="result-metrics">
             <div><dt>Время</dt><dd id="result-time">00:00</dd></div>
-            <div><dt>Дронов сбито</dt><dd id="result-kills">0</dd></div>
+            <div><dt>Вражеских мехов уничтожено</dt><dd id="result-kills">0</dd></div>
           </dl>
           <button class="primary" type="button" id="restart">Новая операция</button>
         </div>
@@ -149,12 +156,12 @@
       <section class="panel mission">
         <div class="panel-heading">
           <h2>Станции связи</h2>
-          <span class="panel-count" id="node-count">0 / 3</span>
+          <span class="panel-count" id="node-count">0 / 6</span>
         </div>
         <p class="explain" id="mission-detail">Займите ворота Цитадели одним мехом. Станции дают ресурсы.</p>
         <div class="stations" id="stations"></div>
         <details class="industrial-sites" open>
-          <summary>Заводы и базы <span id="facility-count" class="panel-count">0 / 4</span></summary>
+          <summary>Заводы и базы <span id="facility-count" class="panel-count">0 / 12</span></summary>
           <div class="stations" id="facilities"></div>
         </details>
         <button class="station citadel-gate" type="button" id="citadel-gate-order" title="Сведения о Цитадели · правый клик отправляет к воротам" disabled>
@@ -239,11 +246,12 @@
         <li>Левый клик по меху показывает комплектацию и приказ. Клик по своему меху также выбирает его. Удерживайте <kbd>Shift</kbd>, чтобы выбрать несколько мехов.</li>
         <li>Клик по базе или заводу показывает доход, темп выпуска и очередь. На сенсорном экране для приказа используйте кнопки «К воротам» и «Атаковать» в карточке объекта.</li>
         <li>Колесо приближает карту к курсору. Перетаскивайте карту мышью или пальцем. На сенсорном экране сводите и разводите два пальца для зума. Кнопка с процентами возвращает общий вид.</li>
+        <li>Кнопки «Лагерь», «Центр» и «Цитадель» перемещают камеру к выбранному участку каньона.</li>
         <li>«Следить за мехом» в его карточке приближает камеру и ведёт её за мехом. Нажмите кнопку ещё раз или сдвиньте карту, чтобы освободить камеру.</li>
-        <li>Правый клик по земле задаёт маршрут, по воротам отправляет меха на захват, по дрону или действующему зданию Цитадели отдаёт приказ атаковать. Клик по карточке станции отправляет к её воротам.</li>
+        <li>Правый клик по земле задаёт маршрут, по воротам отправляет меха на захват, по вражескому меху или действующему зданию Цитадели отдаёт приказ атаковать. Клик по карточке станции отправляет к её воротам.</li>
         <li>Кнопка «Захватить ближайшую точку» выбирает свободные или вражеские ворота по длине маршрута. После захвата мех идёт к следующей точке. Кнопка «Атаковать меха противника» направляет вооружённых мехов за ближайшим вражеским мехом.</li>
         <li>При групповом приказе один мех занимает ворота, остальные прикрывают его. Если он уйдёт или будет уничтожен, захват начнётся заново. Противник в воротах приостанавливает захват.</li>
-        <li>Для победы удержите ворота Цитадели. Когда обстрел выводит из строя оборону и завод, один из атакующих мехов идёт к воротам. Дроны могут захватить лагерь по тем же правилам.</li>
+        <li>Для победы удержите ворота Цитадели. Когда обстрел выводит из строя оборону и завод, один из атакующих мехов идёт к воротам. Соперник может захватить лагерь по тем же правилам.</li>
         <li>Заводы и передовые базы нейтральны до захвата. Каждая даёт половину дохода стартовой базы и собирает мехов в своей очереди. Выберите площадку в мастерской. Передовые базы также ремонтируют мехов.</li>
         <li>Операция открывается на паузе. Осмотритесь, отдайте приказы и закажите мехов. Нажмите «Пауза» или <kbd>Пробел</kbd>, когда будете готовы начать.</li>
         <li>Шасси, каждое оружие и модуль добавляют время сборки. Мастерская показывает время перед заказом. Каждая площадка собирает по одному меху, ресурсы списываются при заказе.</li>

@@ -153,7 +153,8 @@
     const mech = entity.type === "mech";
     const ally = entity.faction === FACTION.ally;
     const neutral = entity.faction === FACTION.neutral;
-    const owner = ally ? (mech ? "Ваш отряд" : "Под вашим контролем") : neutral ? "Нейтральный объект" : "Дроны";
+    const owner = ally ? (mech ? "Ваш отряд" : "Под вашим контролем") :
+      neutral ? "Нейтральный объект" : mech ? "Мех противника" : "Под контролем противника";
     inspector.classList.toggle("ally", ally);
     inspector.classList.toggle("hostile", !ally && !neutral);
     setText("inspection-name", entity.name);
@@ -439,7 +440,7 @@
   function gateStatus(gate, idleLabel) {
     if (gate.contested) return "Оспариваются";
     if (!gate.capturer) return idleLabel;
-    return (gate.faction === FACTION.ally ? "Захват " : "Дроны ") + Math.floor(gate.progress * 100) + "%";
+    return (gate.faction === FACTION.ally ? "Захват " : "Противник ") + Math.floor(gate.progress * 100) + "%";
   }
 
   function showGateProgress(button, gate) {
@@ -453,7 +454,7 @@
     button.className = "station " + (site.type ? "facility " : "") + color;
     button.disabled = !enabled;
     const owner = color === "ally" ? (site.type === "factory" ? "Наш" : "Наша") :
-      color === "hostile" ? "Дроны" : site.type === "factory" ? "Свободен" : "Свободна";
+      color === "hostile" ? "Противник" : site.type === "factory" ? "Свободен" : "Свободна";
     const status = gateStatus(site.gate, incoming ? "Мех в пути" : owner);
     if (state.textContent !== status) state.textContent = status;
     showGateProgress(button, site.gate);
@@ -476,7 +477,7 @@
     const enemySites = match.productionFor(FACTION.hostile);
     const enemyEta = Math.min(...enemySites.map((site) => site.queue[0]?.remaining ?? Infinity));
     const enemyJobs = match.queuedCount(FACTION.hostile);
-    setText("enemy-factory-sites", "Производство дронов · " + enemySites.length);
+    setText("enemy-factory-sites", "Площадки противника · " + enemySites.length);
     setText("enemy-factory-queue", enemyJobs ? "Заказов · " + enemyJobs : enemySites.length ? "Очередь пуста" : "Выпуск остановлен");
     $("enemy-factory-eta").hidden = !Number.isFinite(enemyEta);
     if (Number.isFinite(enemyEta)) setText("enemy-factory-eta", (paused ? "Пауза · " : "Сборка · ") + buildEta(enemyEta));
@@ -625,6 +626,17 @@
     view.overview();
     updatePanels();
   });
+  const sectorTargets = {
+    "sector-camp": () => match.bases[0],
+    "sector-center": () => ({ x: (WIDTH - 1) / 2, y: (HEIGHT - 1) / 2 }),
+    "sector-citadel": () => match.bases[1],
+  };
+  for (const [id, center] of Object.entries(sectorTargets)) {
+    $(id).addEventListener("click", () => {
+      view.focusSector(center());
+      updatePanels();
+    });
+  }
   canvas.addEventListener("wheel", (event) => {
     if (event.ctrlKey) return;
     event.preventDefault();
@@ -762,6 +774,7 @@
     requestAnimationFrame(frame);
   }
 
+  setText("sector-size", WIDTH + " × " + HEIGHT);
   updatePanels();
   requestAnimationFrame(frame);
 })();
