@@ -189,6 +189,7 @@
     setText("inspection-name", entity.name);
     $("inspection-mech").hidden = !mech;
     $("inspection-site").hidden = mech || !visible;
+    $("inspection-production").hidden = !entity.rates;
     $("inspection-intel").hidden = visible;
     if (!visible) {
       setText("inspection-status", "Вне обзора");
@@ -210,18 +211,24 @@
         setText("inspect-fire-line", { clear: "Открыта", blocked: "Перекрыта скалой", distant: "Цель вне дальности" }[status]);
       }
     } else if (visible) {
-      const active = match.productionFor(entity.faction).includes(entity);
-      const paused = !simulationRunning();
-      const status = neutral ? "выпуск после захвата" : !active ? "выпуск остановлен" : paused ? "пауза" : "";
-      setText("inspection-status", status ? owner + " · " + status : owner);
+      let rates;
+      if (entity.rates) {
+        const active = match.productionFor(faction).includes(entity);
+        const status = neutral ? "выпуск после захвата" : !active ? "выпуск остановлен" : !simulationRunning() ? "пауза" : "";
+        setText("inspection-status", status ? owner + " · " + status : owner);
+        setText("inspect-capacity", active || neutral ? assemblyRange : "Остановлен");
+        const job = entity.queue[0];
+        setText("inspect-queue", job ? entity.queue.length + " · " + CHASSIS[job.build[0]].name + " · " +
+          buildEta(job.remaining) + " до выпуска" : "Нет заказов");
+        rates = active || neutral ? entity.rates : null;
+      } else {
+        setText("inspection-status", owner);
+        rates = RESOURCES.map((_, i) => i === entity.resource ? entity.income : 0);
+      }
       setText("inspect-income-label", neutral ? "Доход после захвата за игровую секунду" : "Доход за игровую секунду");
       for (const [i, resource] of RESOURCES.entries()) {
-        setText("inspect-" + resource, rateFormat.format(active || neutral ? entity.rates[i] : 0));
+        setText("inspect-" + resource, rateFormat.format(rates?.[i] ?? 0));
       }
-      setText("inspect-capacity", active || neutral ? assemblyRange : "Остановлен");
-      const job = entity.queue[0];
-      setText("inspect-queue", job ? entity.queue.length + " · " + CHASSIS[job.build[0]].name + " · " +
-        buildEta(job.remaining) + " до выпуска" : "Нет заказов");
     }
 
     const canAttack = visible && !ally && (mech || (entity.type === "base" && entity.hp > 0));
@@ -427,21 +434,20 @@
     return { button, call, name, state };
   }
 
-  function bindCaptureControl(button, getSite, inspectOnClick = false) {
-    const sendToGate = () => {
+  function bindCaptureControl(button, getSite) {
+    onRightClick(button, () => {
       const site = getSite();
       if (command(site, "capture") && view.zoom > 1) view.zoomTo(view.zoom, site.gate);
-    };
-    onRightClick(button, sendToGate);
-    button.addEventListener("click", inspectOnClick ? () => showInspection(getSite()) : sendToGate);
+    });
+    button.addEventListener("click", () => showInspection(getSite()));
   }
 
-  bindCaptureControl($("citadel-gate-order"), () => match.bases[1], true);
+  bindCaptureControl($("citadel-gate-order"), () => match.bases[1]);
   const nodeCards = match.nodes.map((node, index) => {
     const card = makeCard("station");
     card.name.textContent = node.name;
     card.call.textContent = node.call;
-    card.button.title = "Занять ворота станции · " + resourceNames[node.resource] + " +" + format.format(node.income) + "/с";
+    card.button.title = "Сведения о станции · правый клик отправляет к воротам";
     bindCaptureControl(card.button, () => match.nodes[index]);
     $("stations").append(card.button);
     return card;
@@ -451,7 +457,7 @@
     card.name.textContent = site.name;
     card.call.textContent = site.call;
     card.button.title = "Сведения о площадке · правый клик отправляет к воротам";
-    bindCaptureControl(card.button, () => match.facilities[index], true);
+    bindCaptureControl(card.button, () => match.facilities[index]);
     $("facilities").append(card.button);
     return card;
   });
@@ -817,7 +823,7 @@
     setProgress("base-bar", hull);
     setText("base-hp", base.hp > 0 ? Math.ceil(hull * 100) + "%" : "Отключена");
     $("base-bar").style.background = hull < .35 ? "#ff947c" : "";
-    match.nodes.forEach((node, i) => updateSiteCard(nodeCards[i], node, canCommand, incoming.has(node.id)));
+    match.nodes.forEach((node, i) => updateSiteCard(nodeCards[i], node, canOrder, incoming.has(node.id)));
     match.facilities.forEach((site, i) => updateSiteCard(facilityCards[i], site, canOrder, incoming.has(site.id)));
 
     const hasArmed = ready.some((unit) => unit.range > 0);
@@ -1131,7 +1137,7 @@
       issueMapOrder(groundPoint(screen));
       return;
     }
-    const target = view.hitTest(match, screen, (entity) => entity.type === "mech" || !!entity.rates);
+    const target = view.hitTest(match, screen, (entity) => entity.type === "mech" || !!entity.gate);
     if (target && isFriendlyMech(target)) selectUnit(target.id, event.shiftKey);
     else if (target) showInspection(target);
     else {
