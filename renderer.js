@@ -15,6 +15,9 @@ const FrontierView = (() => {
   const COLORS = { ally: "#73f0c5", hostile: "#ff896f", neutral: "#9ed8fa" };
   const MAP_CENTER = { x: (WIDTH - 1) / 2, y: (HEIGHT - 1) / 2 };
   const MINIMAP_MARGIN = 7;
+  const FOG_DENSITY = .65;
+  const PLAYER = FACTION.ally;
+  const fogTone = (state) => state === 1 ? "#0714218b" : "#06101bd8";
   const POLARITY = (faction) => faction === FACTION.ally ? COLORS.ally :
     faction === FACTION.hostile ? COLORS.hostile : COLORS.neutral;
 
@@ -103,6 +106,10 @@ const FrontierView = (() => {
       this.center = { ...MAP_CENTER };
       this.camera = { ...MAP_CENTER, zoom: 1 };
       this.lastDraw = null;
+      this.fog = null;
+      this.miniFog = null;
+      this.fogSight = null;
+      this.fogVersion = null;
       this.hover = null;
       this.marker = null;
       this.followedId = null;
@@ -239,11 +246,49 @@ const FrontierView = (() => {
       }
     }
 
+    refreshFog(match, sight) {
+      if (this.fogSight === sight && this.fogVersion === match.visionVersion) return;
+      this.fogSight = sight;
+      this.fogVersion = match.visionVersion;
+      if (!this.fog) {
+        this.fog = document.createElement("canvas");
+        this.fog.width = Math.ceil(GROUND_WIDTH * FOG_DENSITY);
+        this.fog.height = Math.ceil(GROUND_HEIGHT * FOG_DENSITY);
+      }
+      const ctx = this.fog.getContext("2d");
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, this.fog.width, this.fog.height);
+      ctx.setTransform(FOG_DENSITY, 0, 0, FOG_DENSITY, -GROUND_LEFT * FOG_DENSITY, -GROUND_TOP * FOG_DENSITY);
+      if (this.minimap && !this.miniFog) {
+        this.miniFog = document.createElement("canvas");
+        this.miniFog.width = this.minimap.width;
+        this.miniFog.height = this.minimap.height;
+      }
+      const mini = this.miniFog?.getContext("2d");
+      if (mini) mini.clearRect(0, 0, this.miniFog.width, this.miniFog.height);
+      const cw = mini ? (this.miniFog.width - 2 * MINIMAP_MARGIN) / HEIGHT : 0;
+      const ch = mini ? (this.miniFog.height - 2 * MINIMAP_MARGIN) / WIDTH : 0;
+      for (const tile of match.terrain) {
+        const state = sight[tile.y * WIDTH + tile.x];
+        if (state === 2) continue;
+        const x = (tile.x - tile.y) * TW;
+        const y = (tile.x + tile.y) * TH;
+        const tint = fogTone(state);
+        area(ctx, [[x, y - TH - .5], [x + TW + .5, y], [x, y + TH + .5], [x - TW - .5, y]], tint);
+        if (mini) {
+          const [u, v] = this.minimapProject(tile.x, tile.y);
+          mini.fillStyle = tint;
+          mini.fillRect(u - cw / 2, v - ch / 2, cw + .08, ch + .08);
+        }
+      }
+    }
+
     drawMinimap(match, selected) {
       if (!this.minimap) return;
       const { width, height } = this.minimap;
       const ctx = this.minimap.getContext("2d");
       ctx.drawImage(this.miniGround, 0, 0);
+      if (match.fogOfWar && this.miniFog) ctx.drawImage(this.miniFog, 0, 0);
       ctx.save();
       ctx.beginPath();
       ctx.rect(MINIMAP_MARGIN, MINIMAP_MARGIN, width - 2 * MINIMAP_MARGIN, height - 2 * MINIMAP_MARGIN);
@@ -258,20 +303,32 @@ const FrontierView = (() => {
       }
       for (const site of match.sites) {
         const [x, y] = this.minimapProject(site.x, site.y);
-        const shade = POLARITY(site.faction);
+        const visible = match.canSeeEntity(PLAYER, site);
+        const owner = match.observedFaction(PLAYER, site);
+        const shade = owner === null ? "#64778b" : POLARITY(owner);
+        if (!visible) ctx.globalAlpha = .54;
         if (site.type === "base") {
           area(ctx, [[x, y - 6], [x + 6, y], [x, y + 6], [x - 6, y]], shade, "#101924");
         } else if (site.type) {
           ctx.fillStyle = shade;
           ctx.fillRect(x - 3, y - 3, 6, 6);
         } else ellipse(ctx, x, y, 2.25, 2.25, shade);
-        if (site.gate.progress && site.gate.faction !== site.faction) {
+        ctx.globalAlpha = 1;
+        if (visible && site.gate.progress && site.gate.faction !== site.faction) {
           ellipse(ctx, x, y, 6.5, 6.5, null, POLARITY(site.gate.faction) + "d0", 1.3);
         }
       }
       for (const mech of match.units) {
+        if (!match.canSeeEntity(PLAYER, mech)) continue;
         const [x, y] = this.minimapProject(mech.x, mech.y);
         ellipse(ctx, x, y, 2, 2, POLARITY(mech.faction), selected.has(mech.id) ? "#eaffe8" : "#101924", 1);
+      }
+      const signal = match.scanFor(PLAYER);
+      if (signal && signal.until > match.time) {
+        const [x, y] = this.minimapProject(signal.x, signal.y);
+        const radius = EchoSim.SCAN_RADIUS;
+        ellipse(ctx, x, y, radius * (width - 2 * MINIMAP_MARGIN) / HEIGHT,
+          radius * (height - 2 * MINIMAP_MARGIN) / WIDTH, "#82d7ff20", "#a8e4ffe1", 1.35);
       }
       for (const event of match.news) {
         if (!event.important || !event.point || match.time - event.time > 7) continue;
@@ -286,7 +343,7 @@ const FrontierView = (() => {
       const s = this.scale;
       let chosen = null;
       let best = Infinity;
-      for (const entity of [...match.sites, ...match.entities().filter((item) => item.type !== "base")]) {
+      for (const entity of [...match.sites, ...match.entities().filter((item) => item.type !== "base" && match.canSeeEntity(PLAYER, item))]) {
         if (!accepts(entity)) continue;
         const point = this.project(entity.x, entity.y);
         const isNode = !entity.type;
@@ -486,7 +543,9 @@ const FrontierView = (() => {
         const point = this.project(site.x, site.y);
         const y = this.siteLabelY(site, point);
         if (point.x < 0 || point.x > this.width || y < 5 || y > this.height - 9) continue;
-        const text = site.label ?? site.name;
+        const owner = match.observedFaction(PLAYER, site);
+        const visible = match.canSeeEntity(PLAYER, site);
+        const text = (site.label ?? site.name) + (owner === null ? " · ?" : "");
         ctx.font = site.type === "base" ? "700 12px system-ui, sans-serif" : STATION_TAG_FONT;
         const width = ctx.measureText(text).width + 12;
         const x = clamp(point.x, width / 2 + 2, this.width - width / 2 - 2);
@@ -496,7 +555,8 @@ const FrontierView = (() => {
           tag.top <= other.bottom + 2 && tag.bottom >= other.top - 2);
         if (overlap) continue;
         this.siteTags.set(site.id, tag);
-        const tint = POLARITY(site.faction);
+        const tint = owner === null ? "#a6b4c2" : POLARITY(owner);
+        ctx.globalAlpha = visible ? 1 : .7;
         ctx.fillStyle = "#0b1725e8";
         ctx.fillRect(tag.left, tag.top, width, 17);
         ctx.lineWidth = 1;
@@ -506,6 +566,7 @@ const FrontierView = (() => {
         ctx.textBaseline = "middle";
         ctx.fillStyle = tint;
         ctx.fillText(text, x, y + 1.2);
+        ctx.globalAlpha = 1;
       }
     }
 
@@ -697,7 +758,7 @@ const FrontierView = (() => {
 
     drawPaths(ctx, match, selected) {
       ctx.save();
-      const entities = match.entities();
+      const entities = match.entities().filter((item) => match.canSeeEntity(PLAYER, item));
       for (const mech of match.allies()) {
         if (!selected.has(mech.id)) continue;
         const target = mech.order.kind === "attack" ? entities.find(({ id }) => id === mech.order.target) : null;
@@ -720,7 +781,7 @@ const FrontierView = (() => {
     }
 
     drawFireLines(ctx, match, selected) {
-      const entities = match.entities();
+      const entities = match.entities().filter((item) => match.canSeeEntity(PLAYER, item));
       ctx.save();
       for (const unit of match.allies()) {
         if (!unit.range || !selected.has(unit.id)) continue;
@@ -751,7 +812,7 @@ const FrontierView = (() => {
       const s = this.scale;
       for (const effect of match.effects) {
         const { type } = effect;
-        if (type === "shot" || (type === "dust" && (this.reduced || s < .8))) continue;
+        if (type === "shot" || !match.isVisible(PLAYER, effect) || (type === "dust" && (this.reduced || s < .8))) continue;
         const p = this.project(effect.x, effect.y);
         const margin = 70 * s;
         if (p.x < -margin || p.x > this.width + margin || p.y < -margin || p.y > this.height + margin) continue;
@@ -913,7 +974,8 @@ const FrontierView = (() => {
       const detailed = s >= 1.12;
       const margin = 105 * s;
       for (const effect of match.effects) {
-        if (effect.type !== "shot" && effect.type !== "burst") continue;
+        if ((effect.type !== "shot" && effect.type !== "burst") || !match.isVisible(PLAYER, effect) ||
+            (effect.type === "shot" && !match.isVisible(PLAYER, { x: effect.tx, y: effect.ty }))) continue;
         const from = this.project(effect.x, effect.y);
         const to = effect.type === "shot" ? this.project(effect.tx, effect.ty) : from;
         if (Math.max(from.x, to.x) < -margin || Math.min(from.x, to.x) > this.width + margin ||
@@ -933,7 +995,21 @@ const FrontierView = (() => {
       }
     }
 
-    draw(match, selected, now) {
+    drawRally(ctx, workshop) {
+      if (!workshop?.rally) return;
+      const p = this.project(workshop.x, workshop.y);
+      const q = this.project(workshop.rally.x, workshop.rally.y);
+      ctx.save();
+      ctx.setLineDash([2, 5]);
+      line(ctx, [[p.x, p.y], [q.x, q.y]], "#94d8ffa6", 1.4);
+      ctx.setLineDash([]);
+      ellipse(ctx, q.x, q.y, 9, 5, "#8cdbff2c", "#a3ddff", 1.4);
+      line(ctx, [[q.x, q.y], [q.x, q.y - 16]], "#b4e8ff", 1.6);
+      area(ctx, [[q.x, q.y - 17], [q.x + 13, q.y - 14], [q.x, q.y - 10]], "#a3ddff");
+      ctx.restore();
+    }
+
+    draw(match, selected, now, workshop = null) {
       if (this.terrain !== match.terrain) this.refreshGround(match);
       const dt = this.lastDraw === null ? 0 : Math.max(0, now - this.lastDraw);
       this.lastDraw = now;
@@ -949,19 +1025,31 @@ const FrontierView = (() => {
       this.drawOrbit(ctx, now);
       const s = this.scale;
       ctx.drawImage(this.buffer, this.ox + GROUND_LEFT * s, this.oy + GROUND_TOP * s, GROUND_WIDTH * s, GROUND_HEIGHT * s);
+      const sight = match.sightFor(PLAYER);
+      if (sight) {
+        this.refreshFog(match, sight);
+        ctx.drawImage(this.fog, this.ox + GROUND_LEFT * s, this.oy + GROUND_TOP * s, GROUND_WIDTH * s, GROUND_HEIGHT * s);
+      }
       this.drawGroundEffects(ctx, match);
       this.drawPaths(ctx, match, selected);
-      for (const pad of match.pads) this.drawPad(ctx, pad);
-      const gates = match.sites.map((site) => ({ x: site.gate.x, y: site.gate.y, type: "gate", site }));
-      const wrecks = match.effects.filter((effect) => effect.type === "burst" && effect.wreck);
-      const figures = [...this.scenery,
-        ...match.sites, ...gates, ...wrecks, ...match.units, ...match.pads.map((pad) => pad.turret).filter((t) => t && t.hp > 0)]
+      this.drawRally(ctx, workshop);
+      for (const pad of match.pads) if (match.canSeeEntity(PLAYER, pad)) this.drawPad(ctx, pad);
+      const visible = match.sites.filter((site) => match.canSeeEntity(PLAYER, site));
+      const gates = visible.map((site) => ({ x: site.gate.x, y: site.gate.y, type: "gate", site }));
+      const wrecks = match.effects.filter((effect) => effect.type === "burst" && effect.wreck && match.isVisible(PLAYER, effect));
+      const machines = [...match.units, ...match.pads.map((pad) => pad.turret)]
+        .filter((unit) => unit?.hp > 0 && match.canSeeEntity(PLAYER, unit));
+      const figures = [...this.scenery, ...visible, ...gates, ...wrecks, ...machines]
         .sort((a, b) => a.x + a.y - b.x - b.y);
       for (const thing of figures) {
         const p = this.project(thing.x, thing.y);
         if (p.x < -110 * s || p.x > this.width + 110 * s || p.y < -48 * s || p.y > this.height + 110 * s) continue;
-        if (thing.grit !== undefined) this.drawScenery(ctx, thing);
-        else if (thing.type === "base") this.drawBase(ctx, thing);
+        if (thing.grit !== undefined) {
+          const explored = sight?.[thing.y * WIDTH + thing.x];
+          if (sight && explored !== 2) ctx.globalAlpha = explored === 1 ? .45 : .18;
+          this.drawScenery(ctx, thing);
+          ctx.globalAlpha = 1;
+        } else if (thing.type === "base") this.drawBase(ctx, thing);
         else if (thing.type === "factory" || thing.type === "outpost") this.drawFacility(ctx, thing, now);
         else if (thing.type === "gate") this.drawGate(ctx, thing.site);
         else if (thing.type === "turret") this.drawTurret(ctx, thing);

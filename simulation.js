@@ -10,6 +10,13 @@ const EchoSim = (() => {
   const BASE_CAPTURE_SECONDS = 12;
   const BASE_TARGET_RANGE_BONUS = .5;
   const GATE_RADIUS = .4;
+  const REPAIR_RADIUS = 2.08;
+  const REFIT_FEE = [12, 8, 1];
+  const SCAN_COST = 12;
+  const SCAN_RADIUS = 8.5;
+  const SCAN_DURATION = 7;
+  const SCAN_COOLDOWN = 10;
+  const SIDES = [1, -1];
   const RESOURCES = ["alloy", "energy", "signal"];
   const FACTION = Object.freeze({ neutral: 0, ally: 1, hostile: -1 });
   const STARTING_BANK = [164, 115, 14];
@@ -196,6 +203,56 @@ const EchoSim = (() => {
     return parts && Math.round(parts.reduce((sum, part) => sum + part.assemblyTime, 0) * 10) / 10;
   }
 
+  function loadoutOf(unit) {
+    return [unit.chassisId, ...unit.weaponIds, unit.kitId];
+  }
+
+  function refitQuote(unit, build) {
+    const recipe = normalizeBuild(build);
+    if (!buildParts(recipe) || recipe[0] !== unit.chassisId) return null;
+    const current = loadoutOf(unit);
+    if (recipe.every((part, i) => part === current[i])) return null;
+    const oldWeapons = unit.weaponIds.slice();
+    const parts = [];
+    for (const id of recipe.slice(1, 3)) {
+      if (id === null) continue;
+      const reuse = oldWeapons.indexOf(id);
+      if (reuse >= 0) oldWeapons.splice(reuse, 1);
+      else parts.push(WEAPONS[id]);
+    }
+    if (recipe[3] !== null && recipe[3] !== unit.kitId) parts.push(KIT[recipe[3]]);
+    const cost = REFIT_FEE.map((fee, i) => parts.reduce((sum, part) => sum + part.cost[i], fee));
+    const duration = Math.round(parts.reduce((sum, part) => sum + part.assemblyTime, 2.4) * 10) / 10;
+    return { cost, duration };
+  }
+
+  function equip(unit, recipe) {
+    const [, first, second, kitId] = recipe;
+    const weapons = [WEAPONS[first], WEAPONS[second]].filter(Boolean);
+    const kit = KIT[kitId];
+    const hull = CHASSIS[unit.chassisId].hull + (kit?.hull ?? 0);
+    const condition = unit.hull ? unit.hp / unit.hull : 1;
+    Object.assign(unit, {
+      weaponIds: [first, second], kitId, hull, hp: hull * condition,
+      range: weapons.length ? Math.min(...weapons.map((weapon) => weapon.range)) : 0,
+      maxRange: Math.max(0, ...weapons.map((weapon) => weapon.range)),
+      capture: kit?.capture ?? 1, repair: kit?.repair ?? 0, weaponCooldowns: [0, 0],
+    });
+  }
+
+  function reveal(visibility, point, radius) {
+    const left = Math.max(0, Math.ceil(point.x - radius));
+    const right = Math.min(WIDTH - 1, Math.floor(point.x + radius));
+    const top = Math.max(0, Math.ceil(point.y - radius));
+    const bottom = Math.min(HEIGHT - 1, Math.floor(point.y + radius));
+    for (let y = top; y <= bottom; y++) {
+      for (let x = left; x <= right; x++) {
+        if ((x - point.x) ** 2 + (y - point.y) ** 2 <= radius ** 2) visibility[cellIndex(x, y)] = 2;
+      }
+    }
+  }
+
+
   function nearestWalkable(terrain, target) {
     const x = clamp(Math.round(target.x), 0, WIDTH - 1);
     const y = clamp(Math.round(target.y), 0, HEIGHT - 1);
@@ -305,19 +362,28 @@ const EchoSim = (() => {
   }
 
   class Match {
-    constructor() {
+    constructor({ fogOfWar = false } = {}) {
       this.terrain = makeTerrain();
+      this.fogOfWar = fogOfWar;
+      this.vision = Object.fromEntries(SIDES.map((side) => [side, new Uint8Array(WIDTH * HEIGHT)]));
+      this.knownSites = Object.fromEntries(SIDES.map((side) => [side, new Map()]));
+      this.scans = Object.fromEntries(SIDES.map((side) => [side, null]));
+      this.visionVersion = 0;
+      this.nextVision = 0;
+      this.raid = null;
+      this.nextRaid = 32;
+      this.nextEnemyRefit = 40;
       this.nodes = NODE_DEFS.map(({ gateX, gateY, ...node }, index) => ({
         ...node, id: "station-" + index, faction: FACTION.neutral, gate: makeGate(gateX, gateY),
       }));
       this.bases = BASE_DEFS.map((base, index) => ({
         ...base, id: "base-" + index, type: "base", hull: BASE_HULL, hp: BASE_HULL, range: 3.3,
-        damage: 16, cycle: 1.18, cooldown: 0, bank: STARTING_BANK.slice(), queue: [],
+        damage: 16, cycle: 1.18, cooldown: 0, bank: STARTING_BANK.slice(), queue: [], rally: null, refit: null,
         gate: makeGate(base.x + 2 * base.faction, base.y), rates: BASE_INCOME,
       }));
       this.facilities = FACILITY_DEFS.map(({ gateX, gateY, ...site }, index) => ({
         ...site, id: "facility-" + index, faction: FACTION.neutral, gate: makeGate(gateX, gateY),
-        queue: [], rates: FACILITY_INCOME,
+        queue: [], rates: FACILITY_INCOME, rally: null, refit: null,
       }));
       this.productionSites = [...this.bases, ...this.facilities];
       this.sites = [...this.nodes, ...this.productionSites];
@@ -345,14 +411,84 @@ const EchoSim = (() => {
           this.spawn(base.faction, spot.x, spot.y, design);
         }
       }
+      this.updateVision();
       this.log("Связь с лагерем «Эхо» установлена.", "ally", this.bases[0]);
     }
 
-    log(message, tone = "", point = null, important = false) {
-      this.news.unshift({ id: ++this.newsSequence, message, tone, time: this.time, important,
+    log(message, tone = "", point = null, important = false, replay = null) {
+      this.news.unshift({ id: ++this.newsSequence, message, tone, time: this.time, important, replay,
         point: point ? { x: point.x, y: point.y } : null });
       this.news.length = Math.min(12, this.news.length);
     }
+
+    sightFor(faction) {
+      return this.fogOfWar ? this.vision[faction] : null;
+    }
+
+    scanFor(faction) {
+      return this.scans[faction];
+    }
+
+    isVisible(faction, point) {
+      if (!this.fogOfWar) return true;
+      const x = clamp(Math.round(point.x), 0, WIDTH - 1);
+      const y = clamp(Math.round(point.y), 0, HEIGHT - 1);
+      return this.vision[faction]?.[cellIndex(x, y)] === 2;
+    }
+
+    observedFaction(faction, site) {
+      if (site.faction === faction || this.isVisible(faction, site)) return site.faction;
+      return this.knownSites[faction].get(site.id) ?? null;
+    }
+
+    canSeeEntity(faction, entity) {
+      return entity.faction === faction || this.isVisible(faction, entity);
+    }
+
+    updateVision() {
+      if (!this.fogOfWar) return;
+      for (const faction of SIDES) {
+        const visibility = this.vision[faction];
+        for (let i = 0; i < visibility.length; i++) if (visibility[i] === 2) visibility[i] = 1;
+        for (const site of this.sites) {
+          if (site.faction !== faction) continue;
+          const radii = { base: site.hp > 0 ? 8.5 : 2, outpost: 6, factory: 4.5 };
+          reveal(visibility, site, radii[site.type] ?? 7);
+        }
+        for (const unit of this.mechs(faction)) reveal(visibility, unit, unit.kitId === 0 ? 8.3 : 5.2);
+        for (const { turret } of this.turretsFor(faction)) reveal(visibility, turret, 4.5);
+        const scan = this.scans[faction];
+        if (scan && this.time < scan.until) reveal(visibility, scan, SCAN_RADIUS);
+        for (const site of this.sites) {
+          if (site.faction === faction || this.isVisible(faction, site)) this.knownSites[faction].set(site.id, site.faction);
+        }
+      }
+      this.nextVision = this.time + .17;
+      this.visionVersion++;
+    }
+
+    scanReadyIn(faction) {
+      return Math.max(0, (this.scans[faction]?.readyAt ?? 0) - this.time);
+    }
+
+    requestScan(faction, point) {
+      const base = this.baseFor(faction);
+      if (!this.fogOfWar || this.winner || !base || base.bank[2] < SCAN_COST || this.scanReadyIn(faction) ||
+          !Number.isFinite(point?.x) || !Number.isFinite(point?.y) ||
+          !inBounds(Math.round(point.x), Math.round(point.y))) return false;
+      base.bank[2] -= SCAN_COST;
+      this.scans[faction] = { x: point.x, y: point.y, until: this.time + SCAN_DURATION, readyAt: this.time + SCAN_COOLDOWN };
+      this.updateVision();
+      if (faction === FACTION.ally) this.log("Разведка сектора · " + (Math.round(point.x) + 1) + ", " +
+        (Math.round(point.y) + 1), "ally", point);
+      return true;
+    }
+
+    reportAction(message, faction, point, important = false) {
+      const allied = faction === FACTION.ally;
+      if (allied || this.isVisible(FACTION.ally, point)) this.log(message, allied ? "ally" : "hostile", point, important);
+    }
+
 
     addEffect(type, point, duration, details = {}) {
       this.effects.push({ type, x: point.x, y: point.y, life: duration, max: duration,
@@ -398,31 +534,28 @@ const EchoSim = (() => {
     }
 
     spawn(faction, x, y, build) {
-      const [chassisId, firstWeapon, secondWeapon, kitId] = normalizeBuild(build);
+      const recipe = normalizeBuild(build);
+      const chassisId = recipe[0];
       const chassis = CHASSIS[chassisId];
-      const weaponIds = [firstWeapon, secondWeapon];
-      const weapons = weaponIds.map((id) => WEAPONS[id]).filter(Boolean);
-      const kit = KIT[kitId];
-      const hull = chassis.hull + (kit?.hull ?? 0);
       const spot = nearestWalkable(this.terrain, { x, y });
       const ally = faction === FACTION.ally;
       const mech = {
-        ...spot, id: "mech-" + (++this.sequence), faction, type: "mech", chassisId, weaponIds, kitId,
+        ...spot, id: "mech-" + (++this.sequence), faction, type: "mech", chassisId,
         name: chassis.name + " / " + String(++this.mechNumbers[faction]).padStart(2, "0"),
-        speed: chassis.speed, hull, hp: hull,
-        range: weapons.length ? Math.min(...weapons.map((weapon) => weapon.range)) : 0,
-        maxRange: Math.max(0, ...weapons.map((weapon) => weapon.range)),
-        capture: kit?.capture ?? 1, repair: kit?.repair ?? 0,
-        direction: ally ? -0.7 : 2.45, order: { kind: "hold" }, path: [], weaponCooldowns: [0, 0],
+        speed: chassis.speed,
+        direction: ally ? -0.7 : 2.45, order: { kind: "hold" }, path: [], refitting: false,
         hitAge: 100, replan: 0, moving: false, foot: 0,
       };
+      equip(mech, recipe);
       this.units.push(mech);
       return mech;
     }
 
     setOrder(ids, target, kind = "move") {
+      if (kind === "attack" && !this.canSeeEntity(FACTION.ally, target)) return 0;
       if (kind === "attack" && target.type === "base" && target.hp <= 0) kind = "capture";
-      const active = this.allies().filter((unit) => ids.includes(unit.id) && (kind !== "attack" || unit.range > 0));
+      const active = this.allies().filter((unit) => ids.includes(unit.id) && unit.order.kind !== "refit" &&
+        (kind !== "attack" || unit.range > 0));
       if (kind === "capture" && active.length) {
         return this.orderGroupCapture(active, target) ? active.length : 0;
       }
@@ -438,7 +571,7 @@ const EchoSim = (() => {
     }
 
     captureNearest(ids) {
-      const group = this.allies().filter((unit) => ids.includes(unit.id));
+      const group = this.allies().filter((unit) => ids.includes(unit.id) && unit.order.kind !== "refit");
       const closest = this.findNearestCapture(group);
       if (!closest) return null;
       this.orderGroupCapture(group, closest.site, closest);
@@ -484,11 +617,12 @@ const EchoSim = (() => {
     }
 
     attackNearestMech(ids) {
-      const attackers = this.allies().filter((unit) => ids.includes(unit.id) && unit.range > 0);
+      const attackers = this.allies().filter((unit) => ids.includes(unit.id) && unit.range > 0 && unit.order.kind !== "refit");
       if (!attackers.length) return null;
       let closest = null;
       let bestDistance = Infinity;
       for (const target of this.mechs(FACTION.hostile)) {
+        if (!this.canSeeEntity(FACTION.ally, target)) continue;
         const range = Math.min(...attackers.map((unit) => distance(unit, target)));
         if (range >= bestDistance) continue;
         closest = target;
@@ -519,6 +653,12 @@ const EchoSim = (() => {
     }
 
     giveOrder(unit, order, route) {
+      if (order.kind === "attack" && this.fogOfWar) {
+        const target = this.entities().find((entity) => entity.id === order.target);
+        if (target && (target.type === "base" || this.canSeeEntity(unit.faction, target))) {
+          order.lastKnown = { x: target.x, y: target.y };
+        }
+      }
       unit.order = order;
       unit.engagement = null;
       unit.path = route ?? (["move", "attack-move", "capture", "repair"].includes(order.kind) ?
@@ -598,13 +738,90 @@ const EchoSim = (() => {
       const sites = this.repairSites(FACTION.ally);
       let count = 0;
       for (const unit of this.allies()) {
-        if (!ids.includes(unit.id) || !sites.length) continue;
+        if (!ids.includes(unit.id) || !sites.length || unit.order.kind === "refit") continue;
         const nearest = sites.reduce((a, b) => distance(unit, b) < distance(unit, a) ? b : a);
         this.orderRepair(unit, nearest);
         count++;
       }
       return count;
     }
+
+    refitSites(unit) {
+      if (!unit || unit.hp <= 0 || unit.order.kind === "refit") return [];
+      return this.repairSites(unit.faction).filter((site) => !site.refit)
+        .sort((a, b) => distance(unit, a) - distance(unit, b));
+    }
+
+    requestRefit(faction, unit, site, build) {
+      if (this.winner || unit?.faction !== faction || !this.units.includes(unit) || !this.refitSites(unit).includes(site)) return false;
+      const quote = refitQuote(unit, build);
+      const base = this.baseFor(faction);
+      if (!quote || !affordable(base.bank, quote.cost)) return false;
+      const points = this.serviceSpots(site).filter((point) => distance(point, site) <= REPAIR_RADIUS);
+      const dock = points.reduce((best, point) => !best || distance(unit, point) < distance(unit, best) ? point : best, null);
+      if (!dock) return false;
+      const path = findPath(this.terrain, unit, dock);
+      if (!path.length) return false;
+      this.spend(base, quote.cost);
+      site.refit = { faction, unitId: unit.id, build: normalizeBuild(build).slice(), ...quote, remaining: quote.duration };
+      this.giveOrder(unit, { kind: "refit", target: site.id, ...dock }, path);
+      this.reportAction("Переоснащение заказано · " + unit.name + " · " + site.name, faction, site);
+      return true;
+    }
+
+    cancelRefit(faction, unit) {
+      if (this.winner || unit?.faction !== faction) return false;
+      const site = this.productionSites.find((point) => point.refit?.unitId === unit.id);
+      if (!site) return false;
+      this.closeRefit(site, false);
+      return true;
+    }
+
+    closeRefit(site, complete) {
+      const job = site.refit;
+      if (!job) return;
+      site.refit = null;
+      const unit = this.units.find(({ id }) => id === job.unitId);
+      if (complete) equip(unit, job.build);
+      else if (job.remaining === job.duration) {
+        const { bank } = this.baseFor(job.faction);
+        job.cost.forEach((price, i) => { bank[i] += price; });
+      }
+      if (unit) {
+        unit.refitting = false;
+        this.giveOrder(unit, { kind: "hold" });
+      }
+      const message = complete ? "Мех переоснащён" : "Переоснащение прервано";
+      this.reportAction(message + " · " + (unit?.name ?? site.name), job.faction, site);
+    }
+
+    advanceRefit(site, dt) {
+      const job = site.refit;
+      if (!job) return;
+      const unit = this.units.find(({ id }) => id === job.unitId);
+      if (!unit || unit.hp <= 0 || unit.order.kind !== "refit" || unit.faction !== site.faction) {
+        this.closeRefit(site, false);
+        return;
+      }
+      if (unit.path.length || distance(unit, unit.order) > .2) return;
+      unit.refitting = true;
+      job.remaining = Math.max(0, job.remaining - dt);
+      if (job.remaining <= 1e-9) this.closeRefit(site, true);
+    }
+
+    setRally(faction, site, point) {
+      if (this.winner || !this.productionFor(faction).includes(site) ||
+          (point && (!Number.isFinite(point.x) || !Number.isFinite(point.y)))) return false;
+      site.rally = point ? nearestWalkable(this.terrain, point) : null;
+      return true;
+    }
+
+    serviceSpots(site) {
+      return RELEASE_OFFSETS.map((offset) => offsetFromBase(site, offset))
+        .filter((point) => inBounds(point.x, point.y) && !this.terrain[cellIndex(point.x, point.y)].blocked &&
+          this.sites.every((other) => distance(other, point) > .1 && distance(other.gate, point) > .1));
+    }
+
 
     canBuild(build, faction = FACTION.ally, site = this.baseFor(faction)) {
       const cost = buildCost(build);
@@ -634,13 +851,12 @@ const EchoSim = (() => {
         available = Math.max(0, available - job.remaining);
         site.queue.shift();
         const occupied = this.entities();
-        const spots = RELEASE_OFFSETS.map((offset) => offsetFromBase(site, offset))
-          .filter((point) => inBounds(point.x, point.y) && !this.terrain[cellIndex(point.x, point.y)].blocked &&
-            this.sites.every((other) => distance(other, point) > .1 && distance(other.gate, point) > .1));
+        const spots = this.serviceSpots(site);
         const spot = spots.find((point) => occupied.every((entity) => distance(entity, point) > .7)) ?? spots[0] ?? site;
         const unit = this.spawn(site.faction, spot.x, spot.y, job.build);
         const name = site.faction === FACTION.ally ? unit.name : CHASSIS[job.build[0]].name;
-        this.log("Выпуск меха · " + site.name + " · " + name, site.faction === FACTION.ally ? "ally" : "hostile", site);
+        if (site.rally) this.giveOrder(unit, { kind: "move", ...site.rally });
+        this.reportAction("Выпуск меха · " + site.name + " · " + name, site.faction, site);
       }
     }
 
@@ -674,7 +890,8 @@ const EchoSim = (() => {
         x: pad.x, y: pad.y, id: "turret-" + (++this.sequence), name: "Дозор",
         faction, type: "turret", siteName: site.name, hull: 172, hp: 172, damage: 18, cycle: 1.02, range: 4, cooldown: 0,
       };
-      this.log("Турель «Дозор» развёрнута · " + site.name, faction === FACTION.ally ? "ally" : "hostile", pad);
+      this.reportAction("Турель «Дозор» развёрнута · " + site.name, faction, pad);
+      this.updateVision();
       return true;
     }
 
@@ -771,7 +988,7 @@ const EchoSim = (() => {
           const committed = available.some((unit) => unit.order.kind === "capture" && unit.order.target === site.id);
           return time + resistance * 4 + distance(citadel, site.gate) * .07 -
             (site.type === "outpost" ? 3.4 : site.type ? 3 : 0) -
-            (site.faction === FACTION.ally ? 2.5 : 0) - (committed ? 6 : 0);
+            (this.observedFaction(FACTION.hostile, site) === FACTION.ally ? 2.5 : 0) - (committed ? 6 : 0);
         };
         const site = takeBest(eligible, score);
         opportunities.splice(opportunities.indexOf(site), 1);
@@ -796,7 +1013,7 @@ const EchoSim = (() => {
 
     attackCamp(available, allies, camp, staging) {
       const fighters = available.filter((unit) => unit.range > 0);
-      if (camp.hp <= 0) {
+      if (this.isVisible(FACTION.hostile, camp) && camp.hp <= 0) {
         const plan = this.findNearestCapture(available, [camp]);
         if (plan) {
           available.splice(available.indexOf(plan.unit), 1);
@@ -825,12 +1042,98 @@ const EchoSim = (() => {
       return camp.gate;
     }
 
+    raidPath(unit, destination) {
+      const direct = findPath(this.terrain, unit, destination);
+      const waypoint = nearestWalkable(this.terrain, {
+        x: destination.x < WIDTH / 2 ? 5 : WIDTH - 6,
+        y: (unit.y + destination.y) / 2,
+      });
+      const first = findPath(this.terrain, unit, waypoint);
+      const last = findPath(this.terrain, waypoint, destination);
+      if (!first.length || !last.length || first.length + last.length > direct.length * 1.6 + 5) return direct;
+      return [...first, ...last];
+    }
+
+    finishRaid() {
+      const raid = this.raid;
+      if (!raid) return;
+      this.raid = null;
+      this.nextRaid = this.time + 19;
+    }
+
+    planRaid(available, allies) {
+      const faction = FACTION.hostile;
+      const frontline = allies.filter((unit) => unit.range && unit.y <= HEIGHT * .62);
+      if (!this.raid && this.time >= this.nextRaid && frontline.length >= 3 &&
+          available.filter((unit) => unit.range).length >= 4) {
+        const home = this.baseFor(FACTION.ally);
+        const batteries = this.turretsFor(FACTION.ally).filter(({ turret }) => this.canSeeEntity(faction, turret));
+        const options = [...this.facilities, home].filter((site) =>
+          site.y >= HEIGHT * .54 && this.observedFaction(faction, site) === FACTION.ally && !this.captureLeader(site, faction) &&
+          !allies.some((unit) => unit.range && distance(unit, site.gate) < 8) &&
+          !batteries.some(({ turret }) => distance(turret, site.gate) <= turret.range));
+        const score = (site) => Math.min(...available.map((unit) => distance(unit, site.gate))) -
+          (site.type === "outpost" ? 5 : 0) + (site === home ? 9 : 0);
+        const target = takeBest(options, score);
+        if (target) {
+          const advancing = available.filter((unit) => unit.y >= HEIGHT * .22 && distance(unit, target.gate) < 44);
+          const leader = takeBest(advancing, (unit) => distance(unit, target.gate) / unit.speed + captureSeconds(target) / unit.capture);
+          const escort = takeBest(advancing, (unit) => unit.range && leader ?
+            distance(unit, target.gate) / unit.speed + distance(unit, leader) * .32 : Infinity);
+          if (leader && escort) {
+            this.raid = { target: target.id, leader: leader.id, escort: escort.id, started: this.time, reported: false };
+            this.orderCapture(leader, target, false, this.raidPath(leader, target.gate));
+            const point = this.coverPositions(target).sort((a, b) => distance(escort, a) - distance(escort, b))[0];
+            if (point) this.giveOrder(escort, { kind: "attack-move", ...point }, this.raidPath(escort, point));
+          }
+        }
+      }
+
+      const raid = this.raid;
+      if (!raid) return;
+      const site = this.sites.find(({ id }) => id === raid.target);
+      const leader = available.find(({ id }) => id === raid.leader);
+      const escort = available.find(({ id }) => id === raid.escort);
+      if (site.faction === faction || this.time - raid.started > 34 || !leader ||
+          (leader.order.kind !== "capture" || leader.order.target !== site.id) ||
+          (!escort && !raid.reported && distance(leader, site.gate) > 7)) {
+        this.finishRaid();
+        return;
+      }
+      available.splice(available.indexOf(leader), 1);
+      if (escort) available.splice(available.indexOf(escort), 1);
+      if (!raid.reported && [leader, escort].some((unit) => unit && distance(unit, site.gate) < 7 && this.isVisible(FACTION.ally, unit))) {
+        raid.reported = true;
+        this.log("Контрудар по тылу · " + site.name, "hostile", site.gate, true, "raid");
+      }
+    }
+
+    planEnemySupport(enemies, allies, front) {
+      const faction = FACTION.hostile;
+      const base = this.baseFor(faction);
+      if (this.fogOfWar && this.time >= 20 && base.bank[2] >= SCAN_COST + 4 && !this.scanReadyIn(faction)) {
+        const points = this.facilities.filter((site) => !this.isVisible(faction, site) && site.y >= front.y - 2 && site.y <= front.y + 19);
+        const target = takeBest(points, (site) => distance(site, { x: front.x, y: front.y + 7 }) -
+          (site.type === "outpost" ? 3 : 0));
+        if (target) this.requestScan(faction, target);
+      }
+      if (this.time < this.nextEnemyRefit || enemies.length < 5) return;
+      const unit = enemies.find((mech) => mech.kitId === null && mech.range && mech.hp >= mech.hull * .6 &&
+        !allies.some((enemy) => distance(mech, enemy) < 9) &&
+        this.refitSites(mech).some((site) => distance(mech, site) <= REPAIR_RADIUS));
+      if (unit) {
+        const site = this.refitSites(unit)[0];
+        if (this.requestRefit(faction, unit, site, [...loadoutOf(unit).slice(0, 3), 1])) this.nextEnemyRefit = this.time + 15;
+      }
+    }
+
     think(enemies, allies) {
       const [camp, citadel] = this.bases;
       const faction = FACTION.hostile;
       const repair = this.repairSites(faction).filter((site) =>
         !allies.some((unit) => unit.range && distance(unit, site) < unit.maxRange + 2));
       const available = enemies.filter((unit) => {
+        if (unit.order.kind === "refit") return false;
         const recovering = unit.order.kind === "repair" && unit.hp < unit.hull * .89;
         if (!recovering && unit.hp > unit.hull * .43) return true;
         const near = repair.filter((site) => distance(unit, site) <= 18);
@@ -841,6 +1144,7 @@ const EchoSim = (() => {
       });
       const homeThreat = this.defendSites(available, allies, citadel);
       if (homeThreat) {
+        this.finishRaid();
         const positions = this.coverPositions(citadel);
         for (const unit of available) {
           if (unit.range && (distance(unit, citadel.gate) < 24 || homeThreat.intruder)) {
@@ -850,6 +1154,7 @@ const EchoSim = (() => {
         return citadel.gate;
       }
 
+      this.planRaid(available, allies);
       const occupied = this.facilities.filter((site) => site.faction === faction);
       if (available.filter((unit) => unit.range).length >= 5 || (citadel.hp < citadel.hull * .7 && available.length >= 3)) {
         const guard = takeBest(available, (unit) => unit.range && distance(unit, citadel.gate) <= 22 ?
@@ -861,7 +1166,8 @@ const EchoSim = (() => {
         !best || distance(site.gate, camp.gate) < distance(best.gate, camp.gate) ? site : best, null);
       const fighters = available.filter((unit) => unit.range).length;
       const ready = fighters >= (this.assaultLaunched ? 2 : 3);
-      if (camp.hp <= 0 || !opportunities.length || (ready && occupied.length >= 3 && staging)) {
+      const breach = this.isVisible(faction, camp) && camp.hp <= 0;
+      if (breach || !opportunities.length || (ready && occupied.length >= 3 && staging)) {
         return this.attackCamp(available, allies, camp, staging);
       }
       this.assaultLaunched = false;
@@ -880,7 +1186,8 @@ const EchoSim = (() => {
       if (isMech && slot === undefined) slot = shooter.weaponIds.findIndex((id) => id !== null);
       const weaponId = isMech ? shooter.weaponIds[slot] : null;
       const weapon = isMech ? WEAPONS[weaponId] : shooter;
-      if (!weapon || weapon.damage <= 0 || target.hp <= 0 || !hasLineOfFire(this.terrain, shooter, target)) return;
+      if (!weapon || weapon.damage <= 0 || target.hp <= 0 || !this.canSeeEntity(shooter.faction, target) ||
+          !hasLineOfFire(this.terrain, shooter, target)) return;
       if (isMech) shooter.weaponCooldowns[slot] = weapon.cycle;
       else shooter.cooldown = shooter.cycle;
       shooter.direction = Math.atan2(target.y - shooter.y, target.x - shooter.x);
@@ -915,14 +1222,17 @@ const EchoSim = (() => {
           this.kills++;
           this.log("Уничтожен вражеский мех «" + target.name + "».", "ally", target);
         } else {
-          this.log("Потеря меха «" + target.name + "».", "hostile", target, true);
+          this.log("Потеря меха «" + target.name + "».", "hostile", target, true, "loss");
         }
+        if (target.order.kind === "refit") this.cancelRefit(target.faction, target);
       } else if (target.type === "turret") {
         const lost = target.faction === FACTION.ally;
         this.log("Турель «Дозор» уничтожена · " + target.siteName, lost ? "hostile" : "ally", target, lost);
       } else if (target.type === "base") {
         const allied = target.faction === FACTION.ally;
         this.cancelBuilds(target);
+        this.closeRefit(target, false);
+        target.rally = null;
         this.log(allied ? "Оборона лагеря отключена. Защитите ворота." : "Оборона Цитадели отключена. Займите ворота.",
           allied ? "hostile" : "ally", target.gate, true);
         this.advanceBaseAssault(shooter, target, weapon.range);
@@ -933,7 +1243,7 @@ const EchoSim = (() => {
       let best = null;
       let lowest = Infinity;
       for (const other of entities) {
-        if (other.hp <= 0 || shooter.faction === other.faction) continue;
+        if (other.hp <= 0 || shooter.faction === other.faction || !this.canSeeEntity(shooter.faction, other)) continue;
         const score = distance(shooter, other) + (prioritizeArmed && other.range === 0 ? 3 : 0);
         if (score < lowest && shotStatus(this.terrain, shooter, other, range) === "clear") {
           best = other;
@@ -947,6 +1257,7 @@ const EchoSim = (() => {
       unit.hitAge += dt;
       unit.replan -= dt;
       unit.moving = false;
+      if (unit.refitting) return;
 
       const repairSites = this.repairSites(unit.faction);
       if (unit.order.kind === "repair" && !repairSites.some((site) => site.id === unit.order.target)) {
@@ -954,8 +1265,17 @@ const EchoSim = (() => {
       }
       let orderedTarget = null;
       if (unit.order.kind === "attack") {
-        orderedTarget = entities.find((target) => target.id === unit.order.target && target.hp > 0);
-        if (!orderedTarget) this.giveOrder(unit, { kind: "hold" });
+        orderedTarget = entities.find((target) => target.id === unit.order.target && target.hp > 0 &&
+          this.canSeeEntity(unit.faction, target));
+        if (this.fogOfWar && orderedTarget) unit.order.lastKnown = { x: orderedTarget.x, y: orderedTarget.y };
+        if (!orderedTarget) {
+          const position = unit.order.lastKnown;
+          if (!position || this.isVisible(unit.faction, position)) this.giveOrder(unit, { kind: "hold" });
+          else if (unit.replan <= 0) {
+            unit.path = findPath(this.terrain, unit, position);
+            unit.replan = .55;
+          }
+        }
       }
       const reach = unit.order.reach ?? unit.range;
       unit.engagement = null;
@@ -987,7 +1307,7 @@ const EchoSim = (() => {
           if (target) this.fire(unit, target, slot);
         }
       }
-      const baseRepair = repairSites.some((site) => distance(unit, site) <= 2.08) ? 11 : 0;
+      const baseRepair = repairSites.some((site) => distance(unit, site) <= REPAIR_RADIUS) ? 11 : 0;
       if (unit.hitAge > 3.0) unit.hp = Math.min(unit.hull, unit.hp + (unit.repair + baseRepair) * dt);
     }
 
@@ -1038,7 +1358,8 @@ const EchoSim = (() => {
         const inside = this.units.filter((unit) => unit.hp > 0 && distance(unit, gate) <= GATE_RADIUS);
         gate.contested = inside.some((unit) => unit.faction === FACTION.ally) &&
           inside.some((unit) => unit.faction === FACTION.hostile);
-        const ready = inside.filter((unit) => unit.faction !== site.faction && !unit.moving && !unit.path.length);
+        const ready = inside.filter((unit) =>
+          unit.faction !== site.faction && unit.order.kind !== "refit" && !unit.moving && !unit.path.length);
         const capturer = ready.find((unit) => unit.id === gate.capturer) ?? ready[0];
         if (gate.capturer !== (capturer?.id ?? null)) gate.progress = 0;
         gate.capturer = capturer?.id ?? null;
@@ -1046,7 +1367,7 @@ const EchoSim = (() => {
         if (site.faction === FACTION.ally && gate.faction === FACTION.hostile && !wasThreatened &&
             this.time >= (gate.nextWarning ?? 0)) {
           gate.nextWarning = this.time + 5;
-          this.log("Противник у ворот · " + site.name, "hostile", gate, true);
+          this.log("Противник у ворот · " + site.name, "hostile", gate, true, "raid");
         }
         if (!capturer || gate.contested) continue;
 
@@ -1056,17 +1377,23 @@ const EchoSim = (() => {
         this.addEffect("capture", gate, .95, { faction: capturer.faction });
         if (site.type === "base") {
           gate.progress = 1;
-          this.finish(capturer.faction, allied ? "Цитадель захвачена." : "Мехи противника захватили лагерь «Эхо».");
+          this.finish(capturer.faction, allied ? "Цитадель захвачена." : "Мехи противника захватили лагерь «Эхо».", gate);
           return;
         }
-        if (site.type) this.cancelBuilds(site);
+        if (site.type) {
+          this.cancelBuilds(site);
+          this.closeRefit(site, false);
+          site.rally = null;
+        }
         const pad = this.pads.find((entry) => entry.site === site && entry.turret);
         if (pad) {
           if (pad.turret.hp > 0) this.addEffect("burst", pad, 3.5, { size: .7 });
           pad.turret = null;
         }
-        const lost = site.faction === FACTION.ally && !allied;
+        const previousOwner = site.faction;
+        const lost = previousOwner === FACTION.ally && !allied;
         site.faction = capturer.faction;
+        this.knownSites[previousOwner]?.set(site.id, site.faction);
         if (!site.type) {
           const { bank } = this.baseFor(site.faction);
           bank[0] += 24;
@@ -1076,31 +1403,39 @@ const EchoSim = (() => {
         gate.capturer = null;
         gate.faction = FACTION.neutral;
         const name = site.type ? site.name : "Станция «" + site.name + "»";
-        this.log(name + (allied ? " · под нашим контролем" : " · под контролем противника"),
-          allied ? "ally" : "hostile", gate, lost);
+        if (allied || lost || this.isVisible(FACTION.ally, gate)) {
+          this.log(name + (allied ? " · под нашим контролем" : " · под контролем противника"),
+            allied ? "ally" : "hostile", gate, lost, "capture");
+        }
+        this.updateVision();
       }
     }
 
-    finish(winner, reason) {
+    finish(winner, reason, point = null) {
       this.winner = winner;
       this.reason = reason;
-      this.log(reason, winner === FACTION.ally ? "ally" : "hostile");
+      this.log(reason, winner === FACTION.ally ? "ally" : "hostile", point, true, point ? "capture" : null);
     }
 
     tick(dt) {
       if (this.winner || dt <= 0) return;
       this.time += dt;
+      if (this.fogOfWar && this.time >= this.nextVision) this.updateVision();
       for (const base of this.bases) {
         this.income(base.faction).forEach((value, i) => { base.bank[i] += value * dt; });
       }
-      for (const faction of [FACTION.ally, FACTION.hostile]) {
-        for (const site of this.productionFor(faction)) this.advanceFactory(site, dt);
+      for (const faction of SIDES) {
+        for (const site of this.productionFor(faction)) {
+          this.advanceFactory(site, dt);
+          this.advanceRefit(site, dt);
+        }
       }
       if (this.time >= this.nextThinking) {
         const enemies = this.mechs(FACTION.hostile);
-        const allies = this.allies();
+        const allies = this.allies().filter((unit) => this.canSeeEntity(FACTION.hostile, unit));
         const front = this.think(enemies, allies);
         this.planEnemyProduction(enemies, allies, front);
+        this.planEnemySupport(enemies, allies, front);
         this.nextThinking = this.time + 0.76;
       }
 
@@ -1116,8 +1451,9 @@ const EchoSim = (() => {
     }
   }
 
-  return { WIDTH, HEIGHT, MAX_MECHS, MAX_TURRETS, BASE_CAPTURE_SECONDS, FACILITY_CAPTURE_SECONDS, RESOURCES, FACTION, CHASSIS, WEAPONS, KIT, TURRET_COST,
-    DEFAULT_BUILD, Match, clamp, distance, noise, findPath, nearestWalkable, shotStatus, hasLineOfFire, buildCost, buildDuration, equipmentFor, affordable };
+  return { WIDTH, HEIGHT, MAX_MECHS, MAX_TURRETS, BASE_CAPTURE_SECONDS, FACILITY_CAPTURE_SECONDS, RESOURCES, FACTION, CHASSIS, WEAPONS, KIT,
+    TURRET_COST, SCAN_COST, SCAN_RADIUS, SCAN_DURATION, DEFAULT_BUILD, Match, clamp, distance, noise, findPath,
+    nearestWalkable, shotStatus, hasLineOfFire, buildCost, buildDuration, equipmentFor, affordable, loadoutOf, refitQuote };
 })();
 
 if (typeof module === "object" && module.exports) module.exports = EchoSim;

@@ -7,11 +7,12 @@
   <meta name="description" content="Рубеж Эха — браузерная стратегия. Соберите отряд мехов, захватите станции и защитите лагерь.">
   <title>Рубеж Эха</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=13">
-  <script defer src="simulation.js?v=13"></script>
-  <script defer src="mech-art.js?v=13"></script>
-  <script defer src="renderer.js?v=13"></script>
-  <script defer src="app.js?v=13"></script>
+  <link rel="stylesheet" href="style.css?v=14">
+  <script defer src="simulation.js?v=14"></script>
+  <script defer src="mech-art.js?v=14"></script>
+  <script defer src="renderer.js?v=14"></script>
+  <script defer src="replay.js?v=14"></script>
+  <script defer src="app.js?v=14"></script>
 </head>
 <body>
   <header class="command-bar">
@@ -75,6 +76,7 @@
           title="Нажмите на участок мини-карты, чтобы перейти к нему">
           <canvas id="minimap" width="368" height="174" aria-hidden="true"></canvas>
         </button>
+        <button class="secondary" type="button" id="scan-button" aria-pressed="false" hidden>Разведка</button>
         <div class="sector-tools" role="group" aria-label="Участки карты">
           <button class="secondary" type="button" id="sector-camp">Лагерь</button>
           <button class="secondary" type="button" id="sector-center">Центр</button>
@@ -86,6 +88,17 @@
           <button type="button" id="zoom-in" aria-label="Увеличить масштаб">+</button>
         </div>
       </div>
+      <section class="replay-controls" id="replay-controls" aria-label="Управление повтором" hidden>
+        <div class="panel-heading"><h2 id="replay-title">Повтор боя</h2><button class="secondary" id="replay-close" type="button">К итогам</button></div>
+        <div class="replay-transport">
+          <button class="secondary" id="replay-play" type="button">Пауза</button>
+          <input id="replay-position" type="range" min="0" max="1" step="0.01" value="0" aria-label="Позиция повтора">
+          <time id="replay-time">00:00</time>
+          <label class="replay-rate"><span class="sr-only">Скорость повтора</span>
+            <select id="replay-speed"><option value=".25">0,25×</option><option value=".5">0,5×</option><option value="1">1×</option></select>
+          </label>
+        </div>
+      </section>
       <div class="field-bottom">
         <div class="field-stack">
           <section class="inspection-card" id="object-inspector" aria-labelledby="inspection-name" hidden>
@@ -96,6 +109,7 @@
               </div>
               <button class="utility inspection-close" type="button" id="close-inspector" aria-label="Закрыть сведения">×</button>
             </div>
+            <p class="intel-note" id="inspection-intel" hidden></p>
             <div id="inspection-mech" hidden>
               <dl class="inspection-specs">
                 <div><dt>Шасси</dt><dd id="inspect-chassis"></dd></div>
@@ -124,11 +138,13 @@
             </div>
             <div class="inspection-actions">
               <button class="secondary" type="button" id="inspect-follow" aria-pressed="false" hidden>Следить за мехом</button>
+              <button class="secondary" type="button" id="inspect-refit" hidden>Переоснастить</button>
+              <button class="secondary" type="button" id="inspect-cancel-refit" hidden>Отменить переоснащение</button>
               <button class="secondary" type="button" id="inspect-gate">К воротам</button>
               <button class="secondary" type="button" id="inspect-attack">Атаковать</button>
             </div>
           </section>
-          <div class="event-panel">
+          <div class="event-panel" id="live-events">
             <ol class="event-list" id="event-list" aria-label="Последние события" hidden></ol>
             <div class="field-log">
               <button class="event-message" type="button" id="event-focus">
@@ -148,6 +164,7 @@
           <div class="screen-kicker">Операция «Связной»</div>
           <h2>Верните связь<br>с орбитой.</h2>
           <p>Захватите ворота Цитадели, чтобы восстановить связь. Займите заводы и передовые базы, чтобы собирать мехов ближе к фронту. Карта откроется на паузе.</p>
+          <label class="fog-option"><input type="checkbox" id="fog-of-war"><span><strong>Туман войны</strong><small>Обзор зависит от разведки у обеих сторон</small></span></label>
           <button class="primary" type="button" id="launch">Начать операцию</button>
         </div>
       </div>
@@ -160,6 +177,10 @@
             <div><dt>Время</dt><dd id="result-time">00:00</dd></div>
             <div><dt>Вражеских мехов уничтожено</dt><dd id="result-kills">0</dd></div>
           </dl>
+          <details class="replay-directory" id="replay-directory" hidden>
+            <summary>Повторы ключевых боёв</summary>
+            <ol id="replay-list"></ol>
+          </details>
           <button class="primary" type="button" id="restart">Новая операция</button>
         </div>
       </div>
@@ -237,6 +258,21 @@
           <canvas id="mech-preview" width="324" height="192" role="img" aria-label="Внешний вид собираемого меха"></canvas>
         </div>
         <button class="primary build-button" type="button" id="build" disabled>Заказать меха <kbd>F</kbd></button>
+        <div class="rally-controls">
+          <p class="assembly-time" id="rally-status">Сбор у мастерской</p>
+          <button class="secondary" id="rally-set" type="button" aria-pressed="false">Точка сбора</button>
+          <button class="secondary" id="rally-clear" type="button" aria-label="Сбросить точку сбора">×</button>
+        </div>
+        <details class="presets" id="preset-panel">
+          <summary>Шаблоны мехов</summary>
+          <div class="preset-new">
+            <input id="preset-name" type="text" maxlength="32" placeholder="Название шаблона" aria-label="Название шаблона">
+            <button class="secondary" id="save-preset" type="button">Сохранить</button>
+          </div>
+          <p class="assembly-time" id="preset-empty">Сохраните текущую комплектацию.</p>
+          <p class="assembly-time" id="preset-note" aria-live="polite"></p>
+          <ol id="preset-list"></ol>
+        </details>
         <section class="factory-queue" aria-labelledby="queue-heading">
           <div class="panel-heading">
             <h3 id="queue-heading">Очередь сборки</h3>
@@ -252,6 +288,18 @@
     </aside>
   </main>
 
+  <dialog id="refit-dialog" aria-labelledby="refit-name">
+    <form class="refit-form" id="refit-form">
+      <div class="panel-heading"><h2 id="refit-name">Переоснащение</h2><button type="button" class="utility help-button" id="refit-close" aria-label="Закрыть">×</button></div>
+      <div class="build-select"><label for="refit-site">База</label><select id="refit-site"></select></div>
+      <div class="build-select"><label for="refit-weapon-1">Оружие 1</label><select id="refit-weapon-1"><option value="">Без оружия</option></select></div>
+      <div class="build-select"><label for="refit-weapon-2">Оружие 2</label><select id="refit-weapon-2"><option value="">Без оружия</option></select></div>
+      <div class="build-select"><label for="refit-module">Модуль</label><select id="refit-module"><option value="">Без модуля</option></select></div>
+      <p class="explain">Работа начнётся по прибытии меха на базу. До начала работы отмена возвращает ресурсы.</p>
+      <p id="refit-quote" role="status"></p>
+      <button class="primary" id="refit-submit" type="submit" disabled>Отправить на базу</button>
+    </form>
+  </dialog>
   <dialog id="manual" aria-labelledby="manual-title">
     <div class="manual-content">
       <div class="panel-heading">
@@ -272,6 +320,10 @@
         <li>Высокие скалы перекрывают огонь. Линия от выбранного меха к цели подсвечена зелёным при открытом выстреле, оранжевым пунктиром у скалы и серым за пределами дальности.</li>
         <li>Для победы удержите ворота Цитадели. Когда обстрел выводит из строя оборону и завод, один из атакующих мехов идёт к воротам. Соперник может захватить лагерь по тем же правилам.</li>
         <li>Заводы и передовые базы нейтральны до захвата. Каждая даёт половину дохода стартовой базы и собирает мехов в своей очереди. Выберите площадку в мастерской. Передовые базы также ремонтируют мехов.</li>
+        <li>Переоснащение открывается из карточки своего меха. Выберите базу, оружие и модуль. Во время работы мех освобождается от боевых задач.</li>
+        <li>Шаблоны сохраняют текущую комплектацию. Нажмите на сохранённый шаблон, чтобы заказать меха на выбранной площадке. Точка сбора задаёт первый приказ для новых мехов.</li>
+        <li>При включённом тумане войны обзор дают мехи, базы и станции. Сканер расширяет обзор. Разведка за 12 данных открывает сектор на 7 игровых секунд.</li>
+        <li>После боя выберите событие в списке повторов. Используйте шкалу времени и скорость 0,25× или 0,5×, чтобы рассмотреть эпизод.</li>
         <li>Турель «Дозор» можно развернуть на паузе. Выберите свою базу в мастерской. У лагеря две позиции, у передовой базы одна. Лимит составляет четыре действующие турели на сторону.</li>
         <li>Операция открывается на паузе. Осмотритесь, отдайте приказы и закажите мехов. Нажмите «Пауза» или <kbd>Пробел</kbd>, когда будете готовы начать.</li>
         <li>Шасси, каждое оружие и модуль добавляют время сборки. Мастерская показывает время перед заказом. Каждая площадка собирает по одному меху, ресурсы списываются при заказе.</li>

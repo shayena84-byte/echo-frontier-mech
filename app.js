@@ -3,8 +3,10 @@
 (() => {
   const {
     WIDTH, HEIGHT, MAX_MECHS, MAX_TURRETS, BASE_CAPTURE_SECONDS, RESOURCES, FACTION, CHASSIS, WEAPONS, KIT,
-    TURRET_COST, DEFAULT_BUILD, Match, affordable, buildCost, buildDuration, equipmentFor, clamp, nearestWalkable, shotStatus,
+    TURRET_COST, SCAN_COST, SCAN_DURATION, DEFAULT_BUILD, Match, affordable, buildCost, buildDuration, equipmentFor,
+    clamp, nearestWalkable, shotStatus, loadoutOf, refitQuote,
   } = EchoSim;
+  const PLAYER = FACTION.ally;
   const resourceNames = ["сплав", "энергия", "данные"];
   const $ = (id) => document.getElementById(id);
   const canvas = $("terrain");
@@ -12,6 +14,7 @@
   const minimapControl = $("minimap-control");
   const view = new FrontierView(canvas, minimap);
   const manual = $("manual");
+  const refitDialog = $("refit-dialog");
   const inspector = $("object-inspector");
   const buildQueue = $("build-queue");
   const productionPicker = $("production-site");
@@ -46,7 +49,10 @@
   let factoryListKey = null;
   let pointerType = "";
   let mapMoved = false;
-  let attackMoveMode = false;
+  let mapOrder = null;
+  let refitUnit = null;
+  let recorder = new EchoReplay.Recorder();
+  let playback = null;
   let announcedEvent = null;
   let loggedEvent = null;
 
@@ -67,11 +73,15 @@
   }
 
   function simulationRunning() {
-    return phase === "running" && !manual.open;
+    return phase === "running" && !manual.open && !refitDialog.open;
+  }
+
+  function operationActive() {
+    return phase === "running" || phase === "paused";
   }
 
   function ordersAllowed() {
-    return (phase === "running" || phase === "paused") && !manual.open;
+    return operationActive() && !manual.open && !refitDialog.open;
   }
 
   function touchClick(event) {
@@ -131,7 +141,8 @@
     switch (order.kind) {
       case "attack": {
         const target = site ?? match.entities().find(({ id }) => id === order.target);
-        return target ? "Атаковать · " + target.name : "Атаковать";
+        if (target && match.canSeeEntity(PLAYER, target)) return "Атаковать · " + target.name;
+        return order.lastKnown ? "К последней позиции цели" : "Атаковать";
       }
       case "attack-move": {
         const contact = unit.engagement && match.entities().find(({ id }) => id === unit.engagement);
@@ -148,6 +159,11 @@
         return "Захват · " + site.name;
       case "repair":
         return site ? "На ремонт · " + site.name : "На ремонт";
+      case "refit": {
+        const remaining = site?.refit?.remaining;
+        return (unit.refitting && remaining != null ? "Переоснащение · " + buildEta(remaining) :
+          "На переоснащение") + (site ? " · " + site.name : "");
+      }
       case "move":
         return (unit.path.length ? "Переместиться" : "На позиции") + " · клетка " + (order.x + 1) + ", " + (order.y + 1);
       default:
@@ -156,21 +172,29 @@
   }
 
   function updateInspection(canCommand, hasArmed) {
-    if (inspected?.type === "mech" && inspected.hp <= 0) inspected = null;
+    if (inspected?.type === "mech" && (inspected.hp <= 0 || !match.canSeeEntity(PLAYER, inspected))) inspected = null;
     inspector.hidden = !inspected;
     if (!inspected) return;
 
     const entity = inspected;
     const mech = entity.type === "mech";
-    const ally = entity.faction === FACTION.ally;
-    const neutral = entity.faction === FACTION.neutral;
+    const visible = match.canSeeEntity(PLAYER, entity);
+    const faction = mech ? entity.faction : match.observedFaction(PLAYER, entity);
+    const ally = faction === PLAYER;
+    const neutral = faction === FACTION.neutral;
     const owner = ally ? (mech ? "Ваш отряд" : "Под вашим контролем") :
       neutral ? "Нейтральный объект" : mech ? "Мех противника" : "Под контролем противника";
     inspector.classList.toggle("ally", ally);
-    inspector.classList.toggle("hostile", !ally && !neutral);
+    inspector.classList.toggle("hostile", faction === FACTION.hostile);
     setText("inspection-name", entity.name);
     $("inspection-mech").hidden = !mech;
-    $("inspection-site").hidden = mech;
+    $("inspection-site").hidden = mech || !visible;
+    $("inspection-intel").hidden = visible;
+    if (!visible) {
+      setText("inspection-status", "Вне обзора");
+      setText("inspection-intel", faction === null ? "Сведения о владельце появятся после разведки." :
+        "По последним данным · " + owner);
+    }
     if (mech) {
       setText("inspection-status", owner + " · " + Math.ceil(entity.hp) + " / " + entity.hull + " ОЗ");
       setText("inspect-chassis", CHASSIS[entity.chassisId].name);
@@ -179,13 +203,13 @@
       setText("inspect-weapon-2", WEAPONS[entity.weaponIds[1]]?.name ?? "—");
       setText("inspect-order", describeOrder(entity));
       const id = entity.order.kind === "attack" ? entity.order.target : entity.engagement;
-      const target = id && match.entities().find((candidate) => candidate.id === id);
+      const target = id && match.entities().find((candidate) => candidate.id === id && match.canSeeEntity(PLAYER, candidate));
       $("fire-line-status").hidden = !target;
       if (target) {
         const status = shotStatus(match.terrain, entity, target);
         setText("inspect-fire-line", { clear: "Открыта", blocked: "Перекрыта скалой", distant: "Цель вне дальности" }[status]);
       }
-    } else {
+    } else if (visible) {
       const active = match.productionFor(entity.faction).includes(entity);
       const paused = !simulationRunning();
       const status = neutral ? "выпуск после захвата" : !active ? "выпуск остановлен" : paused ? "пауза" : "";
@@ -200,11 +224,18 @@
         buildEta(job.remaining) + " до выпуска" : "Нет заказов");
     }
 
-    const canAttack = !ally && (mech || (entity.type === "base" && entity.hp > 0));
+    const canAttack = visible && !ally && (mech || (entity.type === "base" && entity.hp > 0));
     $("inspect-gate").hidden = mech;
     $("inspect-gate").disabled = !canCommand;
     $("inspect-attack").hidden = !canAttack;
     $("inspect-attack").disabled = !canCommand || !hasArmed;
+    const inRefit = mech && entity.order.kind === "refit";
+    $("inspect-refit").hidden = !mech || !ally || inRefit;
+    const refitReady = mech && ally && match.refitSites(entity).length > 0;
+    $("inspect-refit").disabled = !ordersAllowed() || !refitReady;
+    $("inspect-refit").title = refitReady ? "Выбрать оборудование и базу" : "Нет свободной ремонтной базы";
+    $("inspect-cancel-refit").hidden = !mech || !ally || !inRefit;
+    $("inspect-cancel-refit").disabled = !ordersAllowed();
     followButton.hidden = !mech;
     followButton.setAttribute("aria-pressed", String(view.followedId === entity.id));
   }
@@ -225,7 +256,7 @@
       }
       return false;
     }
-    attackMoveMode = false;
+    mapOrder = null;
     showOrder(target, kind);
     updatePanels();
     return true;
@@ -245,7 +276,7 @@
     const capture = kind === "capture";
     const target = capture ? match.captureNearest([...selected]) : match.attackNearestMech([...selected]);
     if (target) {
-      attackMoveMode = false;
+      mapOrder = null;
       showOrder(target, kind);
       match.log(capture ? "Приказ на захват · " + target.name : "Приказ атаковать · " + target.name + ".",
         "ally", capture ? target.gate : target);
@@ -260,27 +291,31 @@
     speedButtons.forEach((button, i) => button.setAttribute("aria-pressed", String(i === index)));
   }
 
-  function start(reset = false) {
-    if (reset) {
-      match = new Match();
-      selected = new Set([match.allies()[0].id]);
-      for (const item of unitCards.values()) item.button.remove();
-      unitCards.clear();
-      view.marker = null;
-      view.hover = null;
-      view.overview();
-      productionPicker.value = match.bases[0].id;
-      setSpeed(0);
-    }
-    attackMoveMode = false;
+  function resetOperation(nextPhase) {
+    match = new Match({ fogOfWar: $("fog-of-war").checked });
+    recorder = new EchoReplay.Recorder();
+    recorder.record(match);
+    playback = null;
+    selected = new Set([match.allies()[0].id]);
+    for (const card of unitCards.values()) card.button.remove();
+    unitCards.clear();
+    factoryListKey = null;
+    view.marker = null;
+    view.hover = null;
+    view.overview();
+    productionPicker.value = match.bases[0].id;
+    setSpeed(0);
+    mapOrder = null;
     toggleEventList(false);
     inspected = null;
-    phase = "paused";
+    phase = nextPhase;
     stepBank = 0;
-    $("intro").hidden = true;
+    $("intro").hidden = nextPhase !== "briefing";
     $("end-screen").hidden = true;
-    canvas.focus({ preventScroll: true });
-    tone(445, .25, .055, 735);
+    $("replay-controls").hidden = true;
+    $("live-events").hidden = false;
+    (nextPhase === "briefing" ? $("launch") : canvas).focus({ preventScroll: true });
+    if (nextPhase === "paused") tone(445, .25, .055, 735);
     updatePanels();
   }
 
@@ -301,10 +336,83 @@
     setText("result-time", timeText(match.time));
     setText("result-kills", match.kills);
     $("end-screen").hidden = false;
+    renderReplays();
     $("restart").focus({ preventScroll: true });
     tone(won ? 522 : 210, .43, .08, won ? 784 : 110);
     updatePanels();
   }
+
+  const replayLabels = { loss: "Потеря меха", raid: "Контрудар", capture: "Захват" };
+  const noSelection = new Set();
+
+  function renderReplays() {
+    const clips = recorder.clips.slice().reverse().filter((clip) => clip.frames.length > 1);
+    $("replay-directory").hidden = !clips.length;
+    $("replay-list").replaceChildren(...clips.map((clip) => {
+      const row = document.createElement("li");
+      const button = document.createElement("button");
+      const label = document.createElement("small");
+      button.type = "button";
+      button.className = "secondary";
+      label.textContent = timeText(clip.event.time) + " · " + replayLabels[clip.event.replay];
+      button.append(label, clip.event.message);
+      button.addEventListener("click", () => startReplay(clip));
+      row.append(button);
+      return row;
+    }));
+  }
+
+  function startReplay(clip) {
+    playback = { clip, time: clip.frames[0].time, end: clip.frames.at(-1).time, playing: true };
+    const slider = $("replay-position");
+    slider.min = playback.time;
+    slider.max = playback.end;
+    slider.value = playback.time;
+    $("replay-speed").value = ".5";
+    setText("replay-title", clip.event.message);
+    $("replay-controls").hidden = false;
+    $("end-screen").hidden = true;
+    $("live-events").hidden = true;
+    toggleEventList(false);
+    view.followedId = null;
+    view.marker = null;
+    view.hover = null;
+    view.focusSector(clip.event.point);
+    view.zoomTo(Math.max(view.zoom, Math.min(10, 1.7 / view.fit)), clip.event.point);
+    $("replay-play").focus({ preventScroll: true });
+    updatePanels();
+  }
+
+  function advanceReplay(dt) {
+    if (playback.playing) {
+      playback.time = Math.min(playback.end, playback.time + dt * Number($("replay-speed").value));
+      if (playback.time >= playback.end) playback.playing = false;
+    }
+    const slider = $("replay-position");
+    if (document.activeElement !== slider || playback.playing) slider.value = playback.time;
+    setText("replay-time", timeText(playback.time));
+    setText("replay-play", playback.playing ? "Пауза" : "Воспроизвести");
+    return EchoReplay.frameAt(playback.clip, playback.time);
+  }
+
+  $("replay-play").addEventListener("click", () => {
+    if (!playback) return;
+    if (playback.time >= playback.end) playback.time = playback.clip.frames[0].time;
+    playback.playing = !playback.playing;
+  });
+  $("replay-position").addEventListener("input", (event) => {
+    if (!playback) return;
+    playback.time = Number(event.target.value);
+    playback.playing = false;
+  });
+  $("replay-close").addEventListener("click", () => {
+    playback = null;
+    $("replay-controls").hidden = true;
+    $("live-events").hidden = false;
+    $("end-screen").hidden = false;
+    $("restart").focus({ preventScroll: true });
+  });
+
 
   function makeCard(className) {
     const button = document.createElement("button");
@@ -373,7 +481,6 @@
       if (!card) {
         card = makeCard("unit");
         card.name.textContent = unit.name;
-        card.button.title = equipmentNames(unit.weaponIds, unit.kitId);
         card.button.addEventListener("click", (event) => selectUnit(unit.id, event.shiftKey, true));
         unitCards.set(unit.id, card);
         $("units").append(card.button);
@@ -382,6 +489,8 @@
       const hp = Math.ceil(unit.hp);
       card.call.textContent = index + 1;
       card.state.textContent = hp + " ОЗ";
+      card.button.title = equipmentNames(unit.weaponIds, unit.kitId) +
+        (unit.order.kind === "refit" ? " · " + describeOrder(unit) : "");
       card.button.classList.toggle("selected", picked);
       card.button.disabled = !active;
       card.button.setAttribute("aria-pressed", String(picked));
@@ -416,6 +525,134 @@
     field.addEventListener("change", updatePanels);
   }
   setText("mission-detail", "Удерживайте ворота Цитадели одним мехом " + BASE_CAPTURE_SECONDS + " игровых секунд. Станции дают ресурсы.");
+
+  const presetKey = "echo-frontier-presets-v1";
+  const presetLimit = 8;
+  const presets = readPresets();
+  let presetRows = [];
+
+  function readPresets() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(presetKey) ?? "[]");
+      return Array.isArray(saved) ? saved.filter((item) => typeof item?.name === "string" &&
+        item.name.trim().length && Array.isArray(item.build) && item.build.length === 4 && buildCost(item.build))
+        .slice(0, presetLimit).map(({ name, build }) => ({ name: name.trim().slice(0, 32), build })) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function showPresets() {
+    try {
+      localStorage.setItem(presetKey, JSON.stringify(presets));
+    } catch {
+      setText("preset-note", "Хранилище недоступно. Шаблоны доступны в этой вкладке.");
+    }
+    presetRows = presets.map((preset) => {
+      const row = document.createElement("li");
+      const order = document.createElement("button");
+      const remove = document.createElement("button");
+      const name = document.createElement("strong");
+      const cost = document.createElement("small");
+      order.type = remove.type = "button";
+      order.className = remove.className = "secondary";
+      name.textContent = preset.name;
+      cost.textContent = buildCost(preset.build).join(" / ") + " · " + secondsText(buildDuration(preset.build));
+      order.append(name, cost);
+      order.setAttribute("aria-label", "Заказать по шаблону «" + preset.name + "»");
+      order.addEventListener("click", () => buildMech(preset.build));
+      remove.textContent = "×";
+      remove.setAttribute("aria-label", "Удалить шаблон «" + preset.name + "»");
+      remove.addEventListener("click", () => {
+        presets.splice(presets.indexOf(preset), 1);
+        showPresets();
+        updatePanels();
+      });
+      row.append(order, remove);
+      return { row, order, preset };
+    });
+    $("preset-list").replaceChildren(...presetRows.map(({ row }) => row));
+    $("preset-empty").hidden = presets.length > 0;
+  }
+
+  $("save-preset").addEventListener("click", () => {
+    const build = currentBuild();
+    if (!buildCost(build)) return;
+    const built = CHASSIS[build[0]].name + " · " + equipmentNames(build.slice(1, 3), build[3]);
+    const name = ($("preset-name").value.trim() || built).slice(0, 32);
+    const index = presets.findIndex((preset) => preset.name.toLocaleLowerCase("ru") === name.toLocaleLowerCase("ru"));
+    const preset = { name, build };
+    if (index >= 0) presets[index] = preset;
+    else if (presets.length < presetLimit) presets.push(preset);
+    else {
+      setText("preset-note", "Лимит шаблонов · " + presetLimit);
+      return;
+    }
+    $("preset-name").value = "";
+    setText("preset-note", "");
+    showPresets();
+    updatePanels();
+  });
+  showPresets();
+
+  const refitFields = [
+    { id: "refit-weapon-1", catalog: WEAPONS },
+    { id: "refit-weapon-2", catalog: WEAPONS },
+    { id: "refit-module", catalog: KIT },
+  ];
+  for (const { id, catalog } of refitFields) {
+    const input = $(id);
+    catalog.forEach((part, i) => input.append(new Option(part.name, i)));
+    input.addEventListener("change", updateRefitQuote);
+  }
+
+  function refitDesign() {
+    return [refitUnit.chassisId, ...refitFields.map(({ id }) => $(id).value === "" ? null : Number($(id).value))];
+  }
+
+  function updateRefitQuote() {
+    if (!refitUnit) return;
+    const design = refitDesign();
+    const quote = refitQuote(refitUnit, design);
+    const payable = !!quote && affordable(match.baseFor(PLAYER).bank, quote.cost);
+    setText("refit-quote", quote ? quote.cost.map((value, i) => resourceNames[i] + " " + value).join(" · ") +
+      " · " + secondsText(quote.duration) : buildCost(design) ? "Выберите новое оснащение" : "Нужен хотя бы один предмет оснащения");
+    $("refit-submit").disabled = !payable || !$("refit-site").value;
+    $("refit-submit").title = quote && !payable ? "Недостаточно ресурсов" : "";
+  }
+
+  function openRefit() {
+    if (!ordersAllowed() || !isFriendlyMech(inspected ?? {})) return;
+    const sites = match.refitSites(inspected);
+    if (!sites.length) return;
+    refitUnit = inspected;
+    const design = loadoutOf(refitUnit);
+    setText("refit-name", "Переоснастить «" + refitUnit.name + "»");
+    $("refit-site").replaceChildren(...sites.map((site) => new Option(site.name, site.id)));
+    refitFields.forEach(({ id }, i) => { $(id).value = design[i + 1] ?? ""; });
+    updateRefitQuote();
+    refitDialog.showModal();
+    updatePanels();
+  }
+
+  $("inspect-refit").addEventListener("click", openRefit);
+  $("inspect-cancel-refit").addEventListener("click", () => {
+    if (ordersAllowed() && match.cancelRefit(PLAYER, inspected)) updatePanels();
+  });
+  $("refit-site").addEventListener("change", updateRefitQuote);
+  $("refit-close").addEventListener("click", () => refitDialog.close());
+  $("refit-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const site = match.sites.find((candidate) => candidate.id === $("refit-site").value);
+    if (!operationActive() || !refitUnit || !match.requestRefit(PLAYER, refitUnit, site, refitDesign())) return;
+    refitDialog.close();
+    updatePanels();
+  });
+  refitDialog.addEventListener("close", () => {
+    refitUnit = null;
+    updatePanels();
+  });
+
 
   function selectProductionSite(sites) {
     const listKey = sites.map((site) => site.id + "/" + site.queue.length).join("|");
@@ -474,14 +711,17 @@
 
   function updateSiteCard(card, site, enabled, incoming) {
     const { button, state } = card;
-    const color = site.faction === FACTION.ally ? "ally" : site.faction === FACTION.hostile ? "hostile" : "";
+    const faction = match.observedFaction(PLAYER, site);
+    const visible = match.canSeeEntity(PLAYER, site);
+    const color = faction === PLAYER ? "ally" : faction === FACTION.hostile ? "hostile" : "";
     button.className = "station " + (site.type ? "facility " : "") + color;
     button.disabled = !enabled;
     const owner = color === "ally" ? (site.type === "factory" ? "Наш" : "Наша") :
       color === "hostile" ? "Противник" : site.type === "factory" ? "Свободен" : "Свободна";
-    const status = gateStatus(site.gate, incoming ? "Мех в пути" : owner);
+    const status = visible ? gateStatus(site.gate, incoming ? "Мех в пути" : owner) :
+      incoming ? "Мех в пути" : faction === null ? "Не разведано" : "Вне обзора";
     if (state.textContent !== status) state.textContent = status;
-    showGateProgress(button, site.gate);
+    showGateProgress(button, visible ? site.gate : { progress: 0 });
   }
 
   function toggleEventList(open) {
@@ -544,11 +784,12 @@
       setText(id, Math.floor(bank[i]));
       setText(id + "-rate", "+" + format.format(income[i]) + "/с");
     }
-    const enemySites = match.productionFor(FACTION.hostile);
+    const enemySites = match.productionFor(FACTION.hostile).filter((site) => match.isVisible(PLAYER, site));
     const enemyEta = Math.min(...enemySites.map((site) => site.queue[0]?.remaining ?? Infinity));
-    const enemyJobs = match.queuedCount(FACTION.hostile);
-    setText("enemy-factory-sites", "Площадки противника · " + enemySites.length);
-    setText("enemy-factory-queue", enemyJobs ? "Заказов · " + enemyJobs : enemySites.length ? "Очередь пуста" : "Выпуск остановлен");
+    const enemyJobs = enemySites.reduce((sum, site) => sum + site.queue.length, 0);
+    setText("enemy-factory-sites", (match.fogOfWar ? "Площадки в обзоре · " : "Площадки противника · ") + enemySites.length);
+    setText("enemy-factory-queue", enemyJobs ? "Заказов · " + enemyJobs :
+      enemySites.length ? "Очередь пуста" : match.fogOfWar ? "Вне обзора" : "Выпуск остановлен");
     $("enemy-factory-eta").hidden = !Number.isFinite(enemyEta);
     if (Number.isFinite(enemyEta)) setText("enemy-factory-eta", (paused ? "Пауза · " : "Сборка · ") + buildEta(enemyEta));
     updateNews();
@@ -558,14 +799,18 @@
     const facilityCount = match.facilities.filter((site) => site.faction === FACTION.ally).length;
     setText("facility-count", facilityCount + " / " + match.facilities.length);
     renderSquad(allies, canOrder);
-    const canCommand = canOrder && selected.size > 0;
+    const ready = allies.filter((unit) => selected.has(unit.id) && unit.order.kind !== "refit");
+    const canCommand = canOrder && ready.length > 0;
     const incoming = new Set(allies.filter((unit) => unit.order.continuous).map((unit) => unit.order.target));
     const citadelButton = $("citadel-gate-order");
     citadelButton.disabled = !canOrder;
     $("camp-inspect").disabled = !canOrder;
-    const citadelStatus = incoming.has(enemy.id) ? "Мех в пути" : enemy.hp <= 0 ? "Оборона отключена" : "К захвату";
-    setText("citadel-gate-status", gateStatus(enemy.gate, citadelStatus));
-    showGateProgress(citadelButton, enemy.gate);
+    const enemySeen = match.isVisible(PLAYER, enemy);
+    const citadelStatus = incoming.has(enemy.id) ? "Мех в пути" : !enemySeen ? "Вне обзора" :
+      enemy.hp <= 0 ? "Оборона отключена" : "К захвату";
+    const enemyGate = match.isVisible(PLAYER, enemy.gate) ? enemy.gate : { progress: 0 };
+    setText("citadel-gate-status", gateStatus(enemyGate, citadelStatus));
+    showGateProgress(citadelButton, enemyGate);
     $("camp-gate-status").hidden = !base.gate.capturer && !base.gate.contested;
     setText("camp-gate-status", "Ворота лагеря · " + gateStatus(base.gate, ""));
     const hull = base.hp / base.hull;
@@ -575,16 +820,14 @@
     match.nodes.forEach((node, i) => updateSiteCard(nodeCards[i], node, canCommand, incoming.has(node.id)));
     match.facilities.forEach((site, i) => updateSiteCard(facilityCards[i], site, canOrder, incoming.has(site.id)));
 
-    const hasArmed = allies.some((unit) => selected.has(unit.id) && unit.range > 0);
-    const hasTarget = match.mechs(FACTION.hostile).length > 0;
+    const hasArmed = ready.some((unit) => unit.range > 0);
+    const hasTarget = match.mechs(FACTION.hostile).some((unit) => match.isVisible(PLAYER, unit));
     $("select-all").disabled = !canOrder || !allies.length;
     $("capture-nearest").disabled = !canCommand;
     $("attack-mech").disabled = !canCommand || !hasArmed || !hasTarget;
-    $("attack-mech").title = !hasArmed ? "Выберите меха с оружием" : !hasTarget ? "На поле нет вражеских мехов" : "Преследовать ближайшего вражеского меха";
-    if (!canCommand) attackMoveMode = false;
+    $("attack-mech").title = !hasArmed ? "Выберите меха с оружием" : !hasTarget ? "Нет вражеских мехов в обзоре" : "Преследовать ближайшего вражеского меха";
     $("attack-move").disabled = !canCommand || !hasArmed;
-    $("attack-move").setAttribute("aria-pressed", String(attackMoveMode));
-    $("attack-move-hint").hidden = !attackMoveMode;
+    updateMapOrders(canOrder, workshop, bank);
     $("hold").disabled = !canCommand;
     $("return-base").disabled = !canCommand || !match.repairSites(FACTION.ally).length;
     pauseButton.disabled = phase === "briefing" || phase === "ended";
@@ -603,6 +846,10 @@
     }
     const cost = buildCost(design);
     const duration = buildDuration(design);
+    $("save-preset").disabled = !cost;
+    for (const { order, preset } of presetRows) {
+      order.disabled = !canOrder || !workshop || !match.canBuild(preset.build, PLAYER, workshop);
+    }
     $("build-duration").hidden = duration === null;
     setText("build-duration-value", duration === null ? "" : secondsText(duration));
     for (const [slot, { id, catalog }] of buildSlots.entries()) {
@@ -628,19 +875,62 @@
     $("turret").title = turretStatus + " · " + TURRET_COST.map((value, i) => value + " " + resourceNames[i]).join(", ");
     $("turret").disabled = !canOrder || !freeSocket || turrets >= MAX_TURRETS || !affordable(bank, TURRET_COST);
     canvas.classList.toggle("aiming", canOrder && selected.size > 0);
-    canvas.classList.toggle("attack-aim", attackMoveMode);
+    canvas.classList.toggle("attack-aim", !!mapOrder);
     updateInspection(canCommand, hasArmed);
   }
 
-  function buildMech() {
-    const site = match.productionFor(FACTION.ally).find(({ id }) => id === productionPicker.value);
-    if (!ordersAllowed() || !site || !match.requestBuild(currentBuild(), FACTION.ally, site)) return;
+  function updateMapOrders(canOrder, workshop, bank) {
+    const rallyAllowed = canOrder && !!workshop;
+    const scanWait = match.scanReadyIn(PLAYER);
+    const scanAllowed = canOrder && match.fogOfWar && !scanWait && bank[2] >= SCAN_COST;
+    if (!canOrder || (mapOrder?.kind === "attack-move" && $("attack-move").disabled) ||
+        (mapOrder?.kind === "rally" && workshop !== mapOrder.site) ||
+        (mapOrder?.kind === "scan" && !scanAllowed)) mapOrder = null;
+    $("attack-move").setAttribute("aria-pressed", String(mapOrder?.kind === "attack-move"));
+    $("rally-set").disabled = !rallyAllowed;
+    $("rally-set").setAttribute("aria-pressed", String(mapOrder?.kind === "rally"));
+    $("rally-clear").disabled = !rallyAllowed || !workshop.rally;
+    setText("rally-status", workshop?.rally ? "Сбор · клетка " + (workshop.rally.x + 1) + ", " +
+      (workshop.rally.y + 1) : "Сбор у мастерской");
+    $("scan-button").hidden = !match.fogOfWar || !!playback;
+    $("scan-button").disabled = !scanAllowed;
+    $("scan-button").setAttribute("aria-pressed", String(mapOrder?.kind === "scan"));
+    $("scan-button").title = scanWait ? "Доступно через " + buildEta(scanWait) :
+      "Открывает сектор на " + SCAN_DURATION + " игровых секунд";
+    setText("scan-button", scanWait ? "Разведка · " + buildEta(scanWait) : "Разведка · " + SCAN_COST + " данных");
+    const prompts = {
+      "attack-move": "Укажите точку атаки на карте",
+      rally: "Укажите точку сбора для «" + (mapOrder?.site?.label ?? "Эхо") + "»",
+      scan: "Укажите сектор для разведки",
+    };
+    $("attack-move-hint").hidden = !mapOrder;
+    if (mapOrder) setText("attack-move-hint", prompts[mapOrder.kind] + " · Esc отменяет");
+  }
+
+  function setMapOrder(kind, site = null) {
+    mapOrder = mapOrder?.kind === kind ? null : { kind, site };
+    canvas.focus({ preventScroll: true });
+    updatePanels();
+  }
+
+  function workshopSite() {
+    return match.productionFor(PLAYER).find(({ id }) => id === productionPicker.value);
+  }
+
+  function buildMech(build = currentBuild()) {
+    const site = workshopSite();
+    if (!ordersAllowed() || !site || !match.requestBuild(build, PLAYER, site)) return;
     tone(305, .21, .065, 615);
     updatePanels();
   }
 
-  $("launch").addEventListener("click", () => start());
-  $("restart").addEventListener("click", () => start(true));
+  $("launch").addEventListener("click", () => resetOperation("paused"));
+  $("restart").addEventListener("click", () => resetOperation("briefing"));
+  $("fog-of-war").addEventListener("change", () => {
+    if (phase !== "briefing") return;
+    resetOperation("briefing");
+    $("fog-of-war").focus({ preventScroll: true });
+  });
   pauseButton.addEventListener("click", togglePause);
   $("camp-inspect").addEventListener("click", () => showInspection(match.bases[0]));
   $("close-inspector").addEventListener("click", () => {
@@ -665,9 +955,7 @@
   $("attack-mech").addEventListener("click", () => commandNearest("attack"));
   function toggleAttackMove() {
     if ($("attack-move").disabled) return;
-    attackMoveMode = !attackMoveMode;
-    canvas.focus({ preventScroll: true });
-    updatePanels();
+    setMapOrder("attack-move");
   }
   $("attack-move").addEventListener("click", toggleAttackMove);
   $("hold").addEventListener("click", () => command({}, "hold"));
@@ -677,10 +965,21 @@
     tone(620, .14, .045, 470);
     updatePanels();
   });
-  $("build").addEventListener("click", buildMech);
+  $("build").addEventListener("click", () => buildMech());
+  $("rally-set").addEventListener("click", () => {
+    if (ordersAllowed() && workshopSite()) setMapOrder("rally", workshopSite());
+  });
+  $("rally-clear").addEventListener("click", () => {
+    if (!ordersAllowed() || !match.setRally(PLAYER, workshopSite(), null)) return;
+    mapOrder = null;
+    updatePanels();
+  });
+  $("scan-button").addEventListener("click", () => {
+    if (ordersAllowed() && !$("scan-button").disabled) setMapOrder("scan");
+  });
   productionPicker.addEventListener("change", updatePanels);
   $("turret").addEventListener("click", () => {
-    const workshop = match.productionFor(FACTION.ally).find(({ id }) => id === productionPicker.value);
+    const workshop = workshopSite();
     if (ordersAllowed() && workshop && match.requestTurret(FACTION.ally, workshop)) {
       tone(260, .22, .06, 520);
       updatePanels();
@@ -694,7 +993,9 @@
     updatePanels();
   });
   minimapControl.addEventListener("click", (event) => {
-    view.focusSector(event.detail === 0 ? view.center : view.minimapPosition(event));
+    const point = event.detail === 0 ? view.center : view.minimapPosition(event);
+    if (mapOrder?.kind === "scan" || mapOrder?.kind === "rally") issueMapOrder(point);
+    else view.focusSector(point);
     updatePanels();
   });
   minimapControl.addEventListener("keydown", (event) => {
@@ -718,7 +1019,7 @@
   });
 
   function zoomBy(multiplier) {
-    const focus = view.zoom <= 1 && multiplier > 1 && match.allies().find((unit) => selected.has(unit.id));
+    const focus = !playback && view.zoom <= 1 && multiplier > 1 && match.allies().find((unit) => selected.has(unit.id));
     view.zoomTo(view.zoom * multiplier, focus || undefined);
     updatePanels();
   }
@@ -792,12 +1093,12 @@
   canvas.addEventListener("pointerleave", () => { view.hover = null; });
 
   function commandOnMap(screen) {
-    if (attackMoveMode) return attackMoveOnMap(screen);
+    if (mapOrder) return issueMapOrder(groundPoint(screen));
     const target = view.hitTest(match, screen, isOrderTarget);
     if (target?.type === "mech" || target?.type === "turret") return command(target, "attack");
     const site = view.hitTestGate(match, screen);
     if (site) return command(site, "capture");
-    if (target) return command(target, target.type === "base" && target.faction === FACTION.hostile && target.hp > 0 ?
+    if (target) return command(target, target.type === "base" && target.faction === FACTION.hostile && target.hp > 0 && match.isVisible(PLAYER, target) ?
       "attack" : "capture");
 
     const point = groundPoint(screen);
@@ -810,16 +1111,24 @@
       nearestWalkable(match.terrain, point) : null;
   }
 
-  function attackMoveOnMap(screen) {
-    const point = groundPoint(screen);
-    return point ? command(point, "attack-move") : false;
+  function issueMapOrder(point) {
+    if (!point || !ordersAllowed() || !mapOrder) return false;
+    const { kind, site } = mapOrder;
+    if (kind === "attack-move") return command(point, kind);
+    const accepted = kind === "scan" ? match.requestScan(PLAYER, point) : match.setRally(PLAYER, site, point);
+    if (accepted) {
+      mapOrder = null;
+      showOrder(point, kind);
+      updatePanels();
+    }
+    return accepted;
   }
 
   canvas.addEventListener("click", (event) => {
     if (!ordersAllowed() || mapMoved) return;
     const screen = view.position(event);
-    if (attackMoveMode) {
-      attackMoveOnMap(screen);
+    if (mapOrder) {
+      issueMapOrder(groundPoint(screen));
       return;
     }
     const target = view.hitTest(match, screen, (entity) => entity.type === "mech" || !!entity.rates);
@@ -834,11 +1143,11 @@
     if (commandOnMap(view.position(event))) canvas.focus({ preventScroll: true });
   });
   window.addEventListener("keydown", (event) => {
-    if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || manual.open ||
+    if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || manual.open || refitDialog.open ||
         event.target.closest?.("input, select, textarea")) return;
-    if (event.code === "Escape" && (attackMoveMode || !$("event-list").hidden)) {
+    if (event.code === "Escape" && (mapOrder || !$("event-list").hidden)) {
       event.preventDefault();
-      attackMoveMode = false;
+      mapOrder = null;
       toggleEventList(false);
       canvas.focus({ preventScroll: true });
       updatePanels();
@@ -882,16 +1191,18 @@
       const step = 1 / 30;
       while (stepBank >= step && !match.winner) {
         match.tick(step);
+        recorder.record(match);
         stepBank -= step;
       }
       if (match.winner) showEnd();
       if (audioEnabled && now > lastShot + .19 &&
-          match.effects.some((effect) => effect.type === "shot" && effect.max - effect.life < .08)) {
+          match.effects.some((effect) => effect.type === "shot" && effect.max - effect.life < .08 && match.isVisible(PLAYER, effect))) {
         tone(172, .095, .028, 80);
         lastShot = now;
       }
     }
-    view.draw(match, selected, now);
+    if (playback) view.draw(advanceReplay(dt), noSelection, now);
+    else view.draw(match, selected, now, workshopSite());
     if (now - lastPanels > .14) {
       updatePanels();
       lastPanels = now;
