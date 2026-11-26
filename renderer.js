@@ -12,9 +12,9 @@ const FrontierView = (() => {
   const GROUND_HEIGHT = (WIDTH + HEIGHT) * TH + 34;
   const GROUND_DENSITY = Math.min(2, 3600 / Math.max(GROUND_WIDTH, GROUND_HEIGHT));
   const STATION_TAG_FONT = "600 11px system-ui, sans-serif";
-  const COLORS = { ally: "#73f0c5", hostile: "#ff896f", neutral: "#9ed8fa" };
+  const COLORS = { ally: "#73f0c5", hostile: "#ff896f", neutral: "#cfadfa" };
   const MAP_CENTER = { x: (WIDTH - 1) / 2, y: (HEIGHT - 1) / 2 };
-  const MINIMAP_MARGIN = 7;
+  const MINIMAP_MARGIN = 10.5;
   const FOG_DENSITY = .65;
   const PLAYER = FACTION.ally;
   const fogTone = (state) => state === 1 ? "#0714218b" : "#06101bd8";
@@ -309,6 +309,8 @@ const FrontierView = (() => {
         if (!visible) ctx.globalAlpha = .54;
         if (site.type === "base") {
           area(ctx, [[x, y - 6], [x + 6, y], [x, y + 6], [x - 6, y]], shade, "#101924");
+        } else if (site.type === "outpost") {
+          area(ctx, [[x, y - 5], [x + 5, y], [x, y + 5], [x - 5, y]], null, shade);
         } else if (site.type) {
           ctx.fillStyle = shade;
           ctx.fillRect(x - 3, y - 3, 6, 6);
@@ -343,7 +345,7 @@ const FrontierView = (() => {
       const s = this.scale;
       let chosen = null;
       let best = Infinity;
-      for (const entity of [...match.sites, ...match.entities().filter((item) => item.type !== "base" && match.canSeeEntity(PLAYER, item))]) {
+      for (const entity of [...match.sites, ...match.entities().filter((item) => match.canSeeEntity(PLAYER, item))]) {
         if (!accepts(entity)) continue;
         const point = this.project(entity.x, entity.y);
         const isNode = !entity.type;
@@ -628,11 +630,9 @@ const FrontierView = (() => {
     drawBase(ctx, base) {
       const p = this.project(base.x, base.y);
       const tint = POLARITY(base.faction);
-      const alive = base.hp > 0;
       ctx.save();
       ctx.translate(p.x, p.y);
       ctx.scale(this.scale, this.scale);
-      ctx.globalAlpha = alive ? 1 : .38;
       ellipse(ctx, 0, 3, 43, 22, tint + "16", tint + "6b", 1.3);
       box(ctx, 0, 2, 36, 16, 9, "#5b7882", "#304857", "#476476");
       box(ctx, -15, 1, 17, 8, 18, "#6c929c", "#425e6c", "#43636b");
@@ -641,9 +641,8 @@ const FrontierView = (() => {
       line(ctx, [[11, -32], [11, -51], [18, -54]], tint, 1.9);
       line(ctx, [[-26, -8], [-26, -18], [-18, -23]], tint + "bc", 1.5);
       for (const x of [-22, -11, 5, 17]) ellipse(ctx, x, -5 + Math.abs(x) * .17, 2.1, 1.1, tint);
-      if (alive) luminescence(ctx, 11, -45, 30, tint + "59", tint + "00");
+      luminescence(ctx, 11, -45, 30, tint + "59", tint + "00");
       ctx.restore();
-      if (alive && base.hp < base.hull) this.bar(ctx, p.x, p.y + 18 * this.scale, 45 * this.scale, base.hp / base.hull, tint);
     }
 
     drawFacility(ctx, site, now) {
@@ -772,7 +771,7 @@ const FrontierView = (() => {
         line(ctx, points, target ? "#ff896fce" : mech.order.kind === "attack-move" ? "#ffc984ce" : "#8ff2ca9c", 1.35);
         if (target) {
           const p = this.project(target.x, target.y);
-          const radius = Math.max(9, (target.type === "base" ? 38 : 21) * this.scale);
+          const radius = Math.max(9, 21 * this.scale);
           ctx.setLineDash([]);
           ellipse(ctx, p.x, p.y, radius, radius * .52, null, "#ff896f", 1.4);
         }

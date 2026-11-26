@@ -18,7 +18,6 @@ const EchoReplay = (() => {
         id: site.id, type: site.type, x: site.x, y: site.y, label: site.label, name: site.name,
         faction: faction ?? FACTION.neutral, knownFaction: faction,
         gate: known || visible(site.gate) ? { ...site.gate } : gate,
-        hp: known ? site.hp : undefined, hull: site.hull,
         queue: known && site.queue?.length ? [{ ...site.queue[0] }] : [],
       };
     });
@@ -47,7 +46,7 @@ const EchoReplay = (() => {
       sightFor() { return this.sight; },
       scanFor() { return this.scan; },
       allies() { return []; },
-      entities() { return [...this.units, ...this.bases, ...this.pads.map((pad) => pad.turret)].filter((item) => item?.hp > 0); },
+      entities() { return [...this.units, ...this.pads.map((pad) => pad.turret)].filter((item) => item?.hp > 0); },
     };
   }
 

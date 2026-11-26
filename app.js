@@ -15,6 +15,9 @@
   const view = new FrontierView(canvas, minimap);
   const manual = $("manual");
   const refitDialog = $("refit-dialog");
+  const factoryDialog = $("factory-dialog");
+  const workshopPanel = $("workshop");
+  const workshopHome = workshopPanel.parentElement;
   const inspector = $("object-inspector");
   const buildQueue = $("build-queue");
   const productionPicker = $("production-site");
@@ -45,6 +48,7 @@
   let stepBank = 0;
   let speed = speeds[0];
   let lastPreview = "";
+  let lastInspectedDesign = "";
   let shownQueue = [];
   let factoryListKey = null;
   let pointerType = "";
@@ -73,7 +77,7 @@
   }
 
   function simulationRunning() {
-    return phase === "running" && !manual.open && !refitDialog.open;
+    return phase === "running" && !manual.open && !refitDialog.open && !factoryDialog.open;
   }
 
   function operationActive() {
@@ -131,6 +135,26 @@
     if (entity) inspector.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
+  function openWorkshop(site) {
+    if (!ordersAllowed() || factoryDialog.open || !site) return false;
+    const sites = match.productionFor(PLAYER);
+    if (!sites.includes(site)) return false;
+    selectProductionSite(sites);
+    productionPicker.value = site.id;
+    inspected = null;
+    mapOrder = null;
+    toggleEventList(false);
+    setText("factory-name", site.name);
+    factoryDialog.showModal();
+    $("factory-dock").append(workshopPanel);
+    updatePanels();
+    return true;
+  }
+
+  function inspectSite(site) {
+    if (!openWorkshop(site)) showInspection(site);
+  }
+
   function describeOrder(unit) {
     const { order } = unit;
     if (order.escort && match.units.some((other) => other.hp > 0 && other.order === order.escort)) {
@@ -186,6 +210,7 @@
       neutral ? "Нейтральный объект" : mech ? "Мех противника" : "Под контролем противника";
     inspector.classList.toggle("ally", ally);
     inspector.classList.toggle("hostile", faction === FACTION.hostile);
+    inspector.classList.toggle("neutral", neutral);
     setText("inspection-name", entity.name);
     $("inspection-mech").hidden = !mech;
     $("inspection-site").hidden = mech || !visible;
@@ -198,6 +223,12 @@
     }
     if (mech) {
       setText("inspection-status", owner + " · " + Math.ceil(entity.hp) + " / " + entity.hull + " ОЗ");
+      const design = loadoutOf(entity);
+      const key = [entity.faction, ...design].join("/");
+      if (key !== lastInspectedDesign) {
+        MechArt.preview($("inspect-model"), ...design, { faction: entity.faction, inspect: true });
+        lastInspectedDesign = key;
+      }
       setText("inspect-chassis", CHASSIS[entity.chassisId].name);
       setText("inspect-module", KIT[entity.kitId]?.name ?? "—");
       setText("inspect-weapon-1", WEAPONS[entity.weaponIds[0]]?.name ?? "—");
@@ -231,7 +262,7 @@
       }
     }
 
-    const canAttack = visible && !ally && (mech || (entity.type === "base" && entity.hp > 0));
+    const canAttack = visible && !ally && mech;
     $("inspect-gate").hidden = mech;
     $("inspect-gate").disabled = !canCommand;
     $("inspect-attack").hidden = !canAttack;
@@ -439,10 +470,11 @@
       const site = getSite();
       if (command(site, "capture") && view.zoom > 1) view.zoomTo(view.zoom, site.gate);
     });
-    button.addEventListener("click", () => showInspection(getSite()));
+    button.addEventListener("click", () => inspectSite(getSite()));
   }
 
   bindCaptureControl($("citadel-gate-order"), () => match.bases[1]);
+  bindCaptureControl($("camp-inspect"), () => match.bases[0]);
   const nodeCards = match.nodes.map((node, index) => {
     const card = makeCard("station");
     card.name.textContent = node.name;
@@ -456,7 +488,6 @@
     const card = makeCard("station facility");
     card.name.textContent = site.name;
     card.call.textContent = site.call;
-    card.button.title = "Сведения о площадке · правый клик отправляет к воротам";
     bindCaptureControl(card.button, () => match.facilities[index]);
     $("facilities").append(card.button);
     return card;
@@ -719,8 +750,12 @@
     const { button, state } = card;
     const faction = match.observedFaction(PLAYER, site);
     const visible = match.canSeeEntity(PLAYER, site);
-    const color = faction === PLAYER ? "ally" : faction === FACTION.hostile ? "hostile" : "";
+    const color = faction === PLAYER ? "ally" : faction === FACTION.hostile ? "hostile" : faction === FACTION.neutral ? "neutral" : "";
     button.className = "station " + (site.type ? "facility " : "") + color;
+    if (site.type) {
+      const title = (faction === PLAYER ? "Открыть цех" : "Сведения о площадке") + " · правый клик отправляет к воротам";
+      if (button.title !== title) button.title = title;
+    }
     button.disabled = !enabled;
     const owner = color === "ally" ? (site.type === "factory" ? "Наш" : "Наша") :
       color === "hostile" ? "Противник" : site.type === "factory" ? "Свободен" : "Свободна";
@@ -785,10 +820,18 @@
     const { bank } = base;
     const production = match.productionFor(FACTION.ally);
     const workshop = selectProductionSite(production);
+    $("open-factory").disabled = !canOrder || !workshop;
     const income = match.income();
     for (const [i, id] of RESOURCES.entries()) {
       setText(id, Math.floor(bank[i]));
       setText(id + "-rate", "+" + format.format(income[i]) + "/с");
+    }
+    if (factoryDialog.open && workshop) {
+      setText("factory-name", workshop.name);
+      for (const [i, resource] of RESOURCES.entries()) {
+        setText("factory-bank-" + resource, Math.floor(bank[i]));
+        setText("factory-income-" + resource, "+" + rateFormat.format(workshop.rates[i]) + "/с");
+      }
     }
     const enemySites = match.productionFor(FACTION.hostile).filter((site) => match.isVisible(PLAYER, site));
     const enemyEta = Math.min(...enemySites.map((site) => site.queue[0]?.remaining ?? Infinity));
@@ -809,20 +852,17 @@
     const canCommand = canOrder && ready.length > 0;
     const incoming = new Set(allies.filter((unit) => unit.order.continuous).map((unit) => unit.order.target));
     const citadelButton = $("citadel-gate-order");
+    const campButton = $("camp-inspect");
     citadelButton.disabled = !canOrder;
-    $("camp-inspect").disabled = !canOrder;
+    campButton.disabled = !canOrder;
     const enemySeen = match.isVisible(PLAYER, enemy);
-    const citadelStatus = incoming.has(enemy.id) ? "Мех в пути" : !enemySeen ? "Вне обзора" :
-      enemy.hp <= 0 ? "Оборона отключена" : "К захвату";
+    const citadelStatus = incoming.has(enemy.id) ? "Мех в пути" : !enemySeen ? "Вне обзора" : "К захвату";
     const enemyGate = match.isVisible(PLAYER, enemy.gate) ? enemy.gate : { progress: 0 };
     setText("citadel-gate-status", gateStatus(enemyGate, citadelStatus));
     showGateProgress(citadelButton, enemyGate);
-    $("camp-gate-status").hidden = !base.gate.capturer && !base.gate.contested;
-    setText("camp-gate-status", "Ворота лагеря · " + gateStatus(base.gate, ""));
-    const hull = base.hp / base.hull;
-    setProgress("base-bar", hull);
-    setText("base-hp", base.hp > 0 ? Math.ceil(hull * 100) + "%" : "Отключена");
-    $("base-bar").style.background = hull < .35 ? "#ff947c" : "";
+    setText("camp-gate-status", gateStatus(base.gate, "Под охраной"));
+    campButton.classList.toggle("threatened", base.gate.faction === FACTION.hostile);
+    showGateProgress(campButton, base.gate);
     match.nodes.forEach((node, i) => updateSiteCard(nodeCards[i], node, canOrder, incoming.has(node.id)));
     match.facilities.forEach((site, i) => updateSiteCard(facilityCards[i], site, canOrder, incoming.has(site.id)));
 
@@ -871,7 +911,7 @@
     }
     setText("factory-state", (allies.length + match.queuedCount(FACTION.ally)) + " / " + MAX_MECHS + " мест");
     $("build").disabled = !canOrder || !match.canBuild(design, FACTION.ally, workshop);
-    updateBuildQueue(workshop?.queue ?? [], paused ? "Пауза" : "Сборка");
+    updateBuildQueue(workshop?.queue ?? [], simulationRunning() ? "Сборка" : "Пауза");
     const turrets = match.turretsFor(FACTION.ally).length;
     const freeSocket = workshop && match.freePad(FACTION.ally, workshop);
     const turretStatus = !workshop || workshop.type === "factory" ? "Площадки для турелей есть у баз" :
@@ -938,7 +978,14 @@
     $("fog-of-war").focus({ preventScroll: true });
   });
   pauseButton.addEventListener("click", togglePause);
-  $("camp-inspect").addEventListener("click", () => showInspection(match.bases[0]));
+  $("open-factory").addEventListener("click", () => openWorkshop(workshopSite()));
+  $("close-factory").addEventListener("click", () => factoryDialog.close());
+  factoryDialog.addEventListener("close", () => {
+    if (factoryDialog.open) return;
+    workshopHome.append(workshopPanel);
+    canvas.focus({ preventScroll: true });
+    updatePanels();
+  });
   $("close-inspector").addEventListener("click", () => {
     showInspection(null);
     canvas.focus({ preventScroll: true });
@@ -973,7 +1020,10 @@
   });
   $("build").addEventListener("click", () => buildMech());
   $("rally-set").addEventListener("click", () => {
-    if (ordersAllowed() && workshopSite()) setMapOrder("rally", workshopSite());
+    const site = workshopSite();
+    if (!ordersAllowed() || !site) return;
+    if (factoryDialog.open) factoryDialog.close();
+    setMapOrder("rally", site);
   });
   $("rally-clear").addEventListener("click", () => {
     if (!ordersAllowed() || !match.setRally(PLAYER, workshopSite(), null)) return;
@@ -1104,8 +1154,7 @@
     if (target?.type === "mech" || target?.type === "turret") return command(target, "attack");
     const site = view.hitTestGate(match, screen);
     if (site) return command(site, "capture");
-    if (target) return command(target, target.type === "base" && target.faction === FACTION.hostile && target.hp > 0 && match.isVisible(PLAYER, target) ?
-      "attack" : "capture");
+    if (target) return command(target, "capture");
 
     const point = groundPoint(screen);
     return point ? command(point) : false;
@@ -1139,6 +1188,7 @@
     }
     const target = view.hitTest(match, screen, (entity) => entity.type === "mech" || !!entity.gate);
     if (target && isFriendlyMech(target)) selectUnit(target.id, event.shiftKey);
+    else if (target?.gate) inspectSite(target);
     else if (target) showInspection(target);
     else {
       if (inspected) showInspection(null);
@@ -1151,6 +1201,10 @@
   window.addEventListener("keydown", (event) => {
     if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || manual.open || refitDialog.open ||
         event.target.closest?.("input, select, textarea")) return;
+    if (factoryDialog.open) {
+      if (event.code === "KeyF") buildMech();
+      return;
+    }
     if (event.code === "Escape" && (mapOrder || !$("event-list").hidden)) {
       event.preventDefault();
       mapOrder = null;
@@ -1208,7 +1262,7 @@
       }
     }
     if (playback) view.draw(advanceReplay(dt), noSelection, now);
-    else view.draw(match, selected, now, workshopSite());
+    else if (!factoryDialog.open) view.draw(match, selected, now, workshopSite());
     if (now - lastPanels > .14) {
       updatePanels();
       lastPanels = now;

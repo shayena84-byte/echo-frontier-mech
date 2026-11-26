@@ -404,20 +404,23 @@ const MechArt = (() => {
     return screen(camera(angleIndex(direction) * TAU / ANGLES)([gun.front, gun.side, gun.height]));
   }
 
-  function preview(canvas, chassisId, firstWeapon, secondWeapon, kitId) {
+  function preview(canvas, chassisId, firstWeapon, secondWeapon, kitId, { faction = 1, inspect = false } = {}) {
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    const x = canvas.width * .49;
     const y = canvas.height * .79;
-    const scale = canvas.height / (PROFILES[chassisId].hud + 12);
-    ctx.beginPath();
-    ctx.ellipse(x, y, 23 * scale, 8.9 * scale, 0, 0, TAU);
-    ctx.fillStyle = "#10232be0";
-    ctx.fill();
-    ctx.strokeStyle = "#83bbb05b";
-    ctx.stroke();
-    draw(ctx, { faction: 1, chassisId, weaponIds: [firstWeapon, secondWeapon], kitId, direction: .39 },
-      x, y, scale, { detailed: true });
+    const angles = inspect ? [[.25, .52], [.75, -2.36]] : [[.49, .39]];
+    const scale = Math.min(canvas.height / (PROFILES[chassisId].hud + 12), canvas.width / angles.length / 58);
+    for (const [position, direction] of angles) {
+      const x = canvas.width * position;
+      ctx.beginPath();
+      ctx.ellipse(x, y, 23 * scale, 8.9 * scale, 0, 0, TAU);
+      ctx.fillStyle = "#10232be0";
+      ctx.fill();
+      ctx.strokeStyle = "#83bbb05b";
+      ctx.stroke();
+      draw(ctx, { faction, chassisId, weaponIds: [firstWeapon, secondWeapon], kitId, direction },
+        x, y, scale, { detailed: true });
+    }
   }
 
   return { draw, muzzle, preview, profile: (id) => PROFILES[id] };

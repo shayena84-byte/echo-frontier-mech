@@ -8,7 +8,6 @@ const EchoSim = (() => {
   const STATION_CAPTURE_SECONDS = 5.8;
   const FACILITY_CAPTURE_SECONDS = 8;
   const BASE_CAPTURE_SECONDS = 12;
-  const BASE_TARGET_RANGE_BONUS = .5;
   const GATE_RADIUS = .4;
   const REPAIR_RADIUS = 2.08;
   const REFIT_FEE = [12, 8, 1];
@@ -22,7 +21,6 @@ const EchoSim = (() => {
   const STARTING_BANK = [164, 115, 14];
   const BASE_INCOME = [2.35, 1.75, 0.28];
   const FACILITY_INCOME = BASE_INCOME.map((rate) => rate / 2);
-  const BASE_HULL = 740;
   const CHASSIS = [
     { name: "Стриж", detail: "Быстрое шасси · 90 ОЗ", speed: 2.65, hull: 90, cost: [36, 15, 0], assemblyTime: 2.6 },
     { name: "Веретено", detail: "Универсальное · 122 ОЗ", speed: 2.15, hull: 122, cost: [54, 18, 0], assemblyTime: 3.5 },
@@ -53,8 +51,8 @@ const EchoSim = (() => {
     { type: "outpost", name: "База «Маяк»", label: "МАЯК", x: 24, y: 17, gateX: 24, gateY: 16, call: "Б" },
     { type: "factory", name: "Завод «Каскад»", label: "КАСКАД", x: 25, y: 56, gateX: 24, gateY: 56, call: "З" },
     { type: "factory", name: "Завод «Горн»", label: "ГОРН", x: 11, y: 24, gateX: 12, gateY: 24, call: "З" },
-    { type: "outpost", name: "База «Бастион»", label: "БАСТИОН", x: 8, y: 50, gateX: 8, gateY: 51, call: "Б" },
-    { type: "outpost", name: "База «Кордон»", label: "КОРДОН", x: 28, y: 30, gateX: 28, gateY: 29, call: "Б" },
+    { type: "factory", name: "Завод «Бастион»", label: "БАСТИОН", x: 8, y: 50, gateX: 8, gateY: 51, call: "З" },
+    { type: "factory", name: "Завод «Кордон»", label: "КОРДОН", x: 28, y: 30, gateX: 28, gateY: 29, call: "З" },
     { type: "factory", name: "Завод «Карьер»", label: "КАРЬЕР", x: 27, y: 41, gateX: 26, gateY: 41, call: "З" },
     { type: "factory", name: "Завод «Рудник»", label: "РУДНИК", x: 9, y: 39, gateX: 10, gateY: 39, call: "З" },
     { type: "outpost", name: "База «Заслон»", label: "ЗАСЛОН", x: 14, y: 45, gateX: 14, gateY: 46, call: "Б" },
@@ -71,7 +69,7 @@ const EchoSim = (() => {
   const STARTING_BUILDS = [[0, null, null, 0], [1, 0, null, null]];
   const SCANNER_BUILD = [0, null, null, 0];
   const ENEMY_DEFENSE_BUILDS = [[2, 0, 2, 1], [1, 0, 2, 1], [0, 0, null, 1], DEFAULT_BUILD];
-  const ENEMY_SIEGE_BUILDS = [[1, 1, 1, 1], [1, 1, 0, 1], [0, 1, null, null], DEFAULT_BUILD];
+  const ENEMY_SIEGE_BUILDS = [[2, 0, null, 0], [1, 1, 1, 1], [1, 1, 0, 1], [0, 1, null, null], DEFAULT_BUILD];
   const NEIGHBORS = [
     [1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1],
     [1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2],
@@ -85,8 +83,6 @@ const EchoSim = (() => {
   const makePad = (site, point) => ({ ...point, site, turret: null, get faction() { return site.faction; } });
   const captureSeconds = (site) => site.type === "base" ? BASE_CAPTURE_SECONDS :
     site.type ? FACILITY_CAPTURE_SECONDS : STATION_CAPTURE_SECONDS;
-  const weaponReach = (shooter, target, range) =>
-    range + (shooter.type === "mech" && target.type === "base" ? BASE_TARGET_RANGE_BONUS : 0);
 
   function takeBest(units, score) {
     let best = Infinity;
@@ -306,7 +302,7 @@ const EchoSim = (() => {
   }
 
   function shotStatus(terrain, shooter, target, range = shooter.maxRange ?? shooter.range) {
-    if (!range || distance(shooter, target) > weaponReach(shooter, target, range)) return "distant";
+    if (!range || distance(shooter, target) > range) return "distant";
     return hasLineOfFire(terrain, shooter, target) ? "clear" : "blocked";
   }
 
@@ -377,8 +373,8 @@ const EchoSim = (() => {
         ...node, id: "station-" + index, faction: FACTION.neutral, gate: makeGate(gateX, gateY),
       }));
       this.bases = BASE_DEFS.map((base, index) => ({
-        ...base, id: "base-" + index, type: "base", hull: BASE_HULL, hp: BASE_HULL, range: 3.3,
-        damage: 16, cycle: 1.18, cooldown: 0, bank: STARTING_BANK.slice(), queue: [], rally: null, refit: null,
+        ...base, id: "base-" + index, type: "base", range: 3.3,
+        damage: 12, cycle: 1.18, cooldown: 0, bank: STARTING_BANK.slice(), queue: [], rally: null, refit: null,
         gate: makeGate(base.x + 2 * base.faction, base.y), rates: BASE_INCOME,
       }));
       this.facilities = FACILITY_DEFS.map(({ gateX, gateY, ...site }, index) => ({
@@ -452,7 +448,7 @@ const EchoSim = (() => {
         for (let i = 0; i < visibility.length; i++) if (visibility[i] === 2) visibility[i] = 1;
         for (const site of this.sites) {
           if (site.faction !== faction) continue;
-          const radii = { base: site.hp > 0 ? 8.5 : 2, outpost: 6, factory: 4.5 };
+          const radii = { base: 8.5, outpost: 6, factory: 4.5 };
           reveal(visibility, site, radii[site.type] ?? 7);
         }
         for (const unit of this.mechs(faction)) reveal(visibility, unit, unit.kitId === 0 ? 8.3 : 5.2);
@@ -501,8 +497,7 @@ const EchoSim = (() => {
 
     productionFor(faction) {
       if (faction === FACTION.neutral) return [];
-      return this.productionSites.filter((site) => site.faction === faction &&
-        (site.type !== "base" || site.hp > 0));
+      return this.productionSites.filter((site) => site.faction === faction);
     }
 
     queuedCount(faction) {
@@ -529,8 +524,7 @@ const EchoSim = (() => {
     }
 
     entities() {
-      return [...this.units, ...this.bases, ...this.pads.map((pad) => pad.turret).filter(Boolean)]
-        .filter((entity) => entity.hp > 0);
+      return [...this.units, ...this.pads.map((pad) => pad.turret)].filter((entity) => entity?.hp > 0);
     }
 
     spawn(faction, x, y, build) {
@@ -552,8 +546,8 @@ const EchoSim = (() => {
     }
 
     setOrder(ids, target, kind = "move") {
+      if (kind === "attack" && target.type === "base") kind = "capture";
       if (kind === "attack" && !this.canSeeEntity(FACTION.ally, target)) return 0;
-      if (kind === "attack" && target.type === "base" && target.hp <= 0) kind = "capture";
       const active = this.allies().filter((unit) => ids.includes(unit.id) && unit.order.kind !== "refit" &&
         (kind !== "attack" || unit.range > 0));
       if (kind === "capture" && active.length) {
@@ -655,7 +649,7 @@ const EchoSim = (() => {
     giveOrder(unit, order, route) {
       if (order.kind === "attack" && this.fogOfWar) {
         const target = this.entities().find((entity) => entity.id === order.target);
-        if (target && (target.type === "base" || this.canSeeEntity(unit.faction, target))) {
+        if (target && this.canSeeEntity(unit.faction, target)) {
           order.lastKnown = { x: target.x, y: target.y };
         }
       }
@@ -700,21 +694,6 @@ const EchoSim = (() => {
         if (next) this.orderGroupCapture(group, next.site, next);
         else for (const unit of group) this.giveOrder(unit, { kind: "hold" });
       }
-    }
-
-    advanceBaseAssault(shooter, base, weaponRange) {
-      const allies = this.mechs(shooter.faction);
-      if (allies.some((unit) => unit.id === base.gate.capturer ||
-          (unit.order.kind === "capture" && unit.order.target === base.id))) return;
-
-      const attackers = allies.filter((unit) => unit.order.kind === "attack" && unit.order.target === base.id);
-      if (!attackers.length && shooter.type === "mech" && !shooter.order.escort) {
-        const { kind } = shooter.order;
-        const closingIn = (kind === "move" || kind === "attack-move") &&
-          distance(shooter.order, base) <= weaponReach(shooter, base, weaponRange);
-        if (kind === "hold" || closingIn) attackers.push(shooter);
-      }
-      this.orderGroupCapture(attackers, base);
     }
 
     coverPositions(site) {
@@ -850,7 +829,7 @@ const EchoSim = (() => {
         }
         available = Math.max(0, available - job.remaining);
         site.queue.shift();
-        const occupied = this.entities();
+        const occupied = [...this.bases, ...this.entities()];
         const spots = this.serviceSpots(site);
         const spot = spots.find((point) => occupied.every((entity) => distance(entity, point) > .7)) ?? spots[0] ?? site;
         const unit = this.spawn(site.faction, spot.x, spot.y, job.build);
@@ -1013,17 +992,6 @@ const EchoSim = (() => {
 
     attackCamp(available, allies, camp, staging) {
       const fighters = available.filter((unit) => unit.range > 0);
-      if (this.isVisible(FACTION.hostile, camp) && camp.hp <= 0) {
-        const plan = this.findNearestCapture(available, [camp]);
-        if (plan) {
-          available.splice(available.indexOf(plan.unit), 1);
-          this.orderCapture(plan.unit, camp, false, plan.path);
-        }
-        const positions = this.coverPositions(camp);
-        for (const unit of available) if (unit.range) this.supportPosition(unit, camp, allies, positions);
-        return camp.gate;
-      }
-
       if (!this.assaultLaunched && staging && fighters.length >= 3 &&
           fighters.filter((unit) => distance(unit, staging.gate) < 7 || distance(unit, camp.gate) < 11).length < 3) {
         const positions = this.coverPositions(staging);
@@ -1031,14 +999,27 @@ const EchoSim = (() => {
         return staging.gate;
       }
       this.assaultLaunched = true;
-      const guards = allies.filter((unit) => distance(unit, camp.gate) < 8);
-      for (const unit of fighters) {
-        const targets = guards.filter((guard) => distance(unit, guard) < unit.maxRange + 3);
-        const score = (target) => distance(unit, target) + 4 * target.hp / target.hull + (target.range ? 0 : 2);
-        const target = targets.reduce((best, candidate) => !best || score(candidate) < score(best) ? candidate : best, null);
-        this.orderAttack(unit, target ?? camp);
+      let leader = this.captureLeader(camp, FACTION.hostile);
+      if (!leader) {
+        const durable = available.filter((unit) => {
+          const shots = Math.ceil(BASE_CAPTURE_SECONDS / unit.capture / camp.cycle) + 1;
+          return unit.hp > camp.damage * shots;
+        });
+        const plan = this.findNearestCapture(durable, [camp]) ?? this.findNearestCapture(available, [camp]);
+        if (plan) {
+          leader = plan.unit;
+          this.orderCapture(leader, camp, false, plan.path);
+        }
       }
-      for (const unit of available) if (!unit.range && unit.order.kind !== "hold") this.giveOrder(unit, { kind: "hold" });
+      const turrets = this.turretsFor(FACTION.ally)
+        .map(({ turret }) => turret).filter((turret) => this.canSeeEntity(FACTION.hostile, turret));
+      const threats = [...allies, ...turrets];
+      const positions = this.coverPositions(camp);
+      for (const unit of available) {
+        if (unit === leader) continue;
+        if (unit.range) this.supportPosition(unit, camp, threats, positions);
+        else if (unit.order.kind !== "hold") this.giveOrder(unit, { kind: "hold" });
+      }
       return camp.gate;
     }
 
@@ -1156,7 +1137,7 @@ const EchoSim = (() => {
 
       this.planRaid(available, allies);
       const occupied = this.facilities.filter((site) => site.faction === faction);
-      if (available.filter((unit) => unit.range).length >= 5 || (citadel.hp < citadel.hull * .7 && available.length >= 3)) {
+      if (available.filter((unit) => unit.range).length >= 5) {
         const guard = takeBest(available, (unit) => unit.range && distance(unit, citadel.gate) <= 22 ?
           distance(unit, citadel.gate) / unit.speed : Infinity);
         if (guard) this.orderMove(guard, citadel.gate);
@@ -1166,8 +1147,8 @@ const EchoSim = (() => {
         !best || distance(site.gate, camp.gate) < distance(best.gate, camp.gate) ? site : best, null);
       const fighters = available.filter((unit) => unit.range).length;
       const ready = fighters >= (this.assaultLaunched ? 2 : 3);
-      const breach = this.isVisible(faction, camp) && camp.hp <= 0;
-      if (breach || !opportunities.length || (ready && occupied.length >= 3 && staging)) {
+      const assaulting = this.captureLeader(camp, faction);
+      if (assaulting || !opportunities.length || (ready && occupied.length >= 3 && staging)) {
         return this.attackCamp(available, allies, camp, staging);
       }
       this.assaultLaunched = false;
@@ -1186,7 +1167,7 @@ const EchoSim = (() => {
       if (isMech && slot === undefined) slot = shooter.weaponIds.findIndex((id) => id !== null);
       const weaponId = isMech ? shooter.weaponIds[slot] : null;
       const weapon = isMech ? WEAPONS[weaponId] : shooter;
-      if (!weapon || weapon.damage <= 0 || target.hp <= 0 || !this.canSeeEntity(shooter.faction, target) ||
+      if (!weapon || weapon.damage <= 0 || target.type === "base" || target.hp <= 0 || !this.canSeeEntity(shooter.faction, target) ||
           !hasLineOfFire(this.terrain, shooter, target)) return;
       if (isMech) shooter.weaponCooldowns[slot] = weapon.cycle;
       else shooter.cooldown = shooter.cycle;
@@ -1200,7 +1181,7 @@ const EchoSim = (() => {
         tx: target.x, ty: target.y, weaponId, color,
         high: shooter.type === "base" ? 24 : shooter.type === "turret" ? 14 : 11,
         turretAngle: shooter.type === "turret" ? shooter.direction : null,
-        targetHigh: target.type === "base" ? 18 : target.type === "turret" ? 11 : 7,
+        targetHigh: target.type === "turret" ? 11 : 7,
         mech: isMech ? {
           chassisId: shooter.chassisId, weaponId, slot, direction: shooter.direction,
           moving: shooter.moving, foot: shooter.foot,
@@ -1212,7 +1193,7 @@ const EchoSim = (() => {
         chassisId: target.chassisId, weaponIds: target.weaponIds, kitId: target.kitId,
         faction: target.faction, direction: target.direction + .44, wreck: true,
       } : null;
-      const size = target.type === "base" ? 1.7 : target.chassisId === 2 ? 1.27 : 1;
+      const size = target.chassisId === 2 ? 1.27 : 1;
       this.addEffect("burst", target, 6.5, { size, wreck, color });
       if (target.type === "mech") {
         const bank = this.baseFor(shooter.faction).bank;
@@ -1228,14 +1209,6 @@ const EchoSim = (() => {
       } else if (target.type === "turret") {
         const lost = target.faction === FACTION.ally;
         this.log("Турель «Дозор» уничтожена · " + target.siteName, lost ? "hostile" : "ally", target, lost);
-      } else if (target.type === "base") {
-        const allied = target.faction === FACTION.ally;
-        this.cancelBuilds(target);
-        this.closeRefit(target, false);
-        target.rally = null;
-        this.log(allied ? "Оборона лагеря отключена. Защитите ворота." : "Оборона Цитадели отключена. Займите ворота.",
-          allied ? "hostile" : "ally", target.gate, true);
-        this.advanceBaseAssault(shooter, target, weapon.range);
       }
     }
 
@@ -1290,7 +1263,7 @@ const EchoSim = (() => {
         if (orderedTarget && unit.replan <= 0) {
           const avoid = unit.faction === FACTION.hostile && orderedTarget.type === "mech" &&
             orderedTarget.maxRange > reach ? orderedTarget.maxRange : 0;
-          unit.path = findPath(this.terrain, unit, orderedTarget, weaponReach(unit, orderedTarget, reach), avoid);
+          unit.path = findPath(this.terrain, unit, orderedTarget, reach, avoid);
           unit.replan = 0.55;
         }
         this.advance(unit, dt);
@@ -1342,8 +1315,9 @@ const EchoSim = (() => {
     }
 
     updateDefense(entities, dt) {
-      for (const position of entities) {
-        if (position.type === "mech" || position.hp <= 0) continue;
+      const defenses = [...this.bases, ...entities.filter((entity) => entity.type === "turret")];
+      for (const position of defenses) {
+        if (position.type === "turret" && position.hp <= 0) continue;
         position.cooldown -= dt;
         if (position.cooldown > 0) continue;
         const target = this.nearestTarget(position, entities, position.range);
