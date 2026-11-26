@@ -7,13 +7,13 @@
   <meta name="description" content="Рубеж Эха — браузерная стратегия. Соберите отряд мехов, захватите станции и защитите лагерь.">
   <title>Рубеж Эха</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=17">
+  <link rel="stylesheet" href="style.css?v=18">
   <script defer src="simulation.js?v=17"></script>
   <script defer src="mech-art.js?v=17"></script>
   <script defer src="renderer.js?v=16"></script>
   <script defer src="replay.js?v=16"></script>
-  <script defer src="factory-assembly.js?v=17"></script>
-  <script defer src="app.js?v=17"></script>
+  <script defer src="factory-assembly.js?v=18"></script>
+  <script defer src="app.js?v=18"></script>
 </head>
 <body>
   <header class="command-bar">
@@ -304,19 +304,23 @@
         <h2 id="factory-name"></h2>
         <p class="factory-pause" id="factory-pause">Игра на паузе</p>
       </div>
-      <button class="utility factory-close" type="button" id="close-factory" autofocus>На карту <kbd>Esc</kbd></button>
+      <div class="factory-actions">
+        <button class="utility pause-toggle" type="button" id="factory-pause-toggle" aria-pressed="true"
+          aria-keyshortcuts="Space" aria-describedby="factory-pause" autofocus>Пауза</button>
+        <button class="utility factory-close" type="button" id="close-factory">На карту <kbd>Esc</kbd></button>
+      </div>
     </header>
     <div class="factory-workbench">
       <section class="factory-assembly" aria-labelledby="factory-assembly-title">
         <div class="factory-assembly-head">
-          <div>
-            <h3 id="factory-assembly-title">Сборочная линия</h3>
-            <p id="factory-assembly-status" role="status">Ожидает заказа</p>
-          </div>
-          <button class="secondary" id="factory-clock" type="button" aria-describedby="factory-pause">Запустить время</button>
+          <h3 id="factory-assembly-title">Сборочная линия</h3>
+          <p id="factory-assembly-status" role="status">Ожидает заказа</p>
         </div>
         <canvas id="factory-assembly-scene" width="960" height="516" role="img" aria-label="Установка деталей меха на сборочном посту" hidden></canvas>
-        <progress id="factory-assembly-progress" aria-label="Ход сборки меха" max="1" value="0" hidden></progress>
+        <div class="factory-assembly-timing" id="factory-assembly-timing" hidden>
+          <progress id="factory-assembly-progress" aria-label="Ход сборки меха" max="1" value="0"></progress>
+          <span id="factory-assembly-eta"></span>
+        </div>
       </section>
       <div class="factory-controls">
         <dl class="factory-resources" aria-label="Запасы ресурсов и доход этой площадки за игровую секунду">
@@ -349,7 +353,7 @@
       </div>
       <ul>
         <li>Левый клик по меху показывает его модель с установленным оснащением и текущий приказ. Клик по своему меху также выбирает его. Удерживайте <kbd>Shift</kbd>, чтобы выбрать несколько мехов.</li>
-        <li>Левый клик по своей базе или заводу открывает цех. Закажите меха и нажмите «Запустить время», чтобы увидеть установку деталей. Клик по станции или чужой площадке открывает сведения об объекте.</li>
+        <li>Левый клик по своей базе или заводу открывает цех и ставит бой на паузу. Закажите меха и нажмите «Пауза» вверху, чтобы продолжить бой и увидеть сборку. Клик по станции или чужой площадке открывает сведения об объекте.</li>
         <li>Колесо приближает карту к курсору. Перетаскивайте карту мышью или пальцем. На сенсорном экране сводите и разводите два пальца для зума. Кнопка с процентами возвращает общий вид.</li>
         <li>Кнопки «Лагерь», «Центр» и «Цитадель» перемещают камеру к выбранному участку каньона.</li>
         <li>Мини-карта показывает весь каньон и текущий обзор. Нажмите на участок карты или событие в журнале, чтобы перейти к нему.</li>

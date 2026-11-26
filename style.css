@@ -627,6 +627,8 @@ body:has(.factory-dialog[open]) { overflow: hidden; }
 .factory-caption { margin: 0 0 3px; color: #a9efe1; font-size: 14px; font-weight: 700; }
 .factory-header h2 { margin: 0; font-size: clamp(27px, 4vw, 58px); line-height: 1.03; letter-spacing: -.04em; text-shadow: 0 3px 15px #071119; }
 .factory-pause { margin: 7px 0 0; color: #cce0e8; font-size: 14px; text-shadow: 0 1px 6px #050c12; }
+.factory-actions { display: flex; flex: none; align-items: center; gap: 8px; }
+.factory-actions .pause-toggle { min-height: 42px; }
 .factory-close { min-height: 42px; flex: none; padding: 6px 12px; background: #10202cf5; font-size: 14px; }
 .factory-workbench {
   display: grid;
@@ -647,10 +649,9 @@ body:has(.factory-dialog[open]) { overflow: hidden; }
   box-shadow: 0 12px 38px #05090d91;
 }
 .factory-assembly:has(canvas:not([hidden])) { width: 100%; align-self: center; }
-.factory-assembly-head { display: flex; justify-content: space-between; align-items: center; gap: 9px; padding: 10px 13px; }
+.factory-assembly-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; padding: 10px 13px; }
 .factory-assembly-head h3 { margin: 0; letter-spacing: -.02em; font-size: 17px; }
-.factory-assembly-head p { margin: 3px 0 0; color: #addcda; font-size: 14px; }
-#factory-clock { min-height: 38px; font-size: 13px; padding-inline: 10px; }
+.factory-assembly-head p { margin: 0; color: #addcda; font-size: 14px; }
 #factory-assembly-scene {
   display: block;
   width: 100%;
@@ -660,11 +661,21 @@ body:has(.factory-dialog[open]) { overflow: hidden; }
   background: #0b1822;
   border-block: 1px solid #31515e;
 }
+.factory-assembly-timing {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 7px 13px;
+  color: #d3e7eb;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 #factory-assembly-progress {
   display: block;
-  width: calc(100% - 26px);
+  flex: 1 1 auto;
+  min-width: 0;
   height: 7px;
-  margin: 8px 13px;
   accent-color: var(--mint);
 }
 .factory-controls {
@@ -729,7 +740,8 @@ body:has(.factory-dialog[open]) { overflow: hidden; }
     background-size: 100% max(45dvh, 290px), auto max(45dvh, 290px);
     background-position: center top, 38% top;
   }
-  .factory-header { min-height: max(38dvh, 245px); padding: 15px 12px; }
+  .factory-header { min-height: max(38dvh, 245px); padding: 64px 12px 15px; }
+  .factory-actions { position: fixed; top: 12px; right: 12px; z-index: 2; }
   .factory-workbench { display: block; padding: 0 10px 15px; }
   .factory-assembly { width: 100%; margin-bottom: 10px; }
   .factory-controls { max-height: none; }

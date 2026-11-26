@@ -193,10 +193,13 @@ const FactoryAssembly = (() => {
   }
 
   return class {
-    constructor(canvas, status, progress) {
+    constructor({ canvas, status, timing, progress, eta, formatTime }) {
       this.canvas = canvas;
       this.status = status;
+      this.timing = timing;
       this.progress = progress;
+      this.eta = eta;
+      this.formatTime = formatTime;
       this.ctx = canvas.getContext("2d", { alpha: false });
       this.quiet = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
       this.reset();
@@ -221,7 +224,7 @@ const FactoryAssembly = (() => {
       }
       const departure = this.completed && time - this.completed.time < DEPARTURE_SECONDS;
       this.canvas.hidden = !job && !departure;
-      this.progress.hidden = !job;
+      this.timing.hidden = !job;
       if (!job && !departure) {
         if (this.status.textContent !== "Ожидает заказа") this.status.textContent = "Ожидает заказа";
         return;
@@ -241,6 +244,8 @@ const FactoryAssembly = (() => {
         const progress = clamp((elapsed - step.start) / (step.end - step.start), 0, 1);
         if (this.status.textContent !== step.label) this.status.textContent = step.label;
         this.progress.value = elapsed / job.duration;
+        const remaining = this.formatTime(job.remaining) + " до выпуска";
+        if (this.eta.textContent !== remaining) this.eta.textContent = remaining;
         showStage(this.ctx, this.plan.rig, job.build, step.slot, progress, time, this.quiet);
       } else {
         if (this.status.textContent !== "Мех выпущен") this.status.textContent = "Мех выпущен";
