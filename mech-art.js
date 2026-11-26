@@ -10,6 +10,7 @@ const MechArt = (() => {
   const SPRITE_HEIGHT = 88;
   const ORIGIN_X = 47;
   const ORIGIN_Y = 66;
+  const ASSEMBLY_DIRECTION = Math.PI / 6;
   const MAX_SPRITES = 128;
   const OUTLINE = "#10151cbe";
   const PROFILES = [
@@ -218,14 +219,15 @@ const MechArt = (() => {
     }
   }
 
-  function buildMesh(chassisId, weaponIds, kitId, stride, kicks, detailed) {
-    const mesh = [];
+  function chassisMesh(chassisId, stride, detailed) {
+    const undercarriage = [];
     const profile = PROFILES[chassisId];
     const heavy = chassisId === 1;
     const tracked = chassisId === 2;
     let deck = profile.deck;
-    if (tracked) tracks(mesh, stride, detailed);
-    else deck = biped(mesh, profile, heavy, stride, detailed);
+    if (tracked) tracks(undercarriage, stride, detailed);
+    else deck = biped(undercarriage, profile, heavy, stride, detailed);
+    const mesh = [];
     const top = deck + profile.height;
     const nose = tracked ? 9.8 : heavy ? 3.5 : 7.6;
     const canopy = tracked ? 10.5 : heavy ? 8.2 : 7.5;
@@ -261,7 +263,13 @@ const MechArt = (() => {
       }
     }
     if (tracked) armor(mesh, 12.4, 0, 4.55, 8.5, 17.9, 6.45, "shoulder", "steel");
+    return { undercarriage, body: mesh, deck };
+  }
 
+  function buildMesh(chassisId, weaponIds, kitId, stride, kicks, detailed) {
+    const { undercarriage, body, deck } = chassisMesh(chassisId, stride, detailed);
+    const mesh = undercarriage.concat(body);
+    const profile = PROFILES[chassisId];
     if (kitId !== null) equipment(mesh, kitId, profile, deck);
     for (const [slot, id] of weaponIds.entries()) {
       if (id !== null) armament(mesh, mount(profile, chassisId, id, deck, slot), id, kicks[slot], detailed);
@@ -363,11 +371,11 @@ const MechArt = (() => {
     ctx.restore();
   }
 
-  function sprite(unit, still, kicks, detailed) {
+  function sprite(unit, still, kicks, detailed, density) {
     const { chassisId, weaponIds, kitId, faction, direction } = unit;
     const heading = angleIndex(direction);
     const gait = gaitIndex(unit, still);
-    const key = [faction, chassisId, ...weaponIds, kitId, heading, gait, ...kicks, detailed, Boolean(unit.wreck)].join("/");
+    const key = [faction, chassisId, ...weaponIds, kitId, heading, gait, ...kicks, detailed, density, Boolean(unit.wreck)].join("/");
     if (sprites.has(key)) {
       const cached = sprites.get(key);
       sprites.delete(key);
@@ -375,9 +383,15 @@ const MechArt = (() => {
       return cached;
     }
     const palette = faction < 0 ? PALETTES.hostile : PALETTES.ally;
-    const faces = visibleFaces(buildMesh(chassisId, weaponIds, kitId, gait, kicks, detailed),
-      heading * TAU / ANGLES, palette, unit.wreck);
-    const density = detailed ? 3 : 1.5;
+    const mesh = buildMesh(chassisId, weaponIds, kitId, gait, kicks, detailed);
+    const canvas = renderSprite(mesh, heading * TAU / ANGLES, palette, detailed, density, unit.wreck);
+    if (sprites.size >= MAX_SPRITES) sprites.delete(sprites.keys().next().value);
+    sprites.set(key, canvas);
+    return canvas;
+  }
+
+  function renderSprite(mesh, angle, palette, detailed, density, wreck = false) {
+    const faces = visibleFaces(mesh, angle, palette, wreck);
     const canvas = document.createElement("canvas");
     canvas.width = SPRITE_WIDTH * density;
     canvas.height = SPRITE_HEIGHT * density;
@@ -385,14 +399,43 @@ const MechArt = (() => {
     ctx.setTransform(density, 0, 0, density, ORIGIN_X * density, ORIGIN_Y * density);
     ctx.lineJoin = "round";
     faces.forEach((face, i) => paintFace(ctx, face, detailed, i));
-    if (sprites.size >= MAX_SPRITES) sprites.delete(sprites.keys().next().value);
-    sprites.set(key, canvas);
     return canvas;
   }
 
-  function draw(ctx, unit, x, y, scale, { still = false, kicks = [0, 0], detailed = false } = {}) {
-    ctx.drawImage(sprite(unit, still, kicks, detailed), x - ORIGIN_X * scale, y - ORIGIN_Y * scale,
-      SPRITE_WIDTH * scale, SPRITE_HEIGHT * scale);
+  function drawSprite(ctx, image, x, y, scale) {
+    ctx.drawImage(image, x - ORIGIN_X * scale, y - ORIGIN_Y * scale, SPRITE_WIDTH * scale, SPRITE_HEIGHT * scale);
+  }
+
+  function draw(ctx, unit, x, y, scale, { still = false, kicks = [0, 0], detailed = false, density = detailed ? 3 : 1.5 } = {}) {
+    drawSprite(ctx, sprite(unit, still, kicks, detailed, density), x, y, scale);
+  }
+
+  function assemblyRig([chassisId, first, second, kitId]) {
+    const profile = PROFILES[chassisId];
+    const { undercarriage, body, deck } = chassisMesh(chassisId, 0, true);
+    const rotate = camera(ASSEMBLY_DIRECTION);
+    const part = (mesh, mountPoint) => {
+      const image = renderSprite(mesh, ASSEMBLY_DIRECTION, PALETTES.ally, true, 6);
+      return {
+        socket: screen(rotate(mountPoint)),
+        draw(ctx, x, y, scale) { drawSprite(ctx, image, x, y, scale); },
+      };
+    };
+    const weapons = [first, second].map((id, slot) => {
+      if (id == null) return null;
+      const gun = mount(profile, chassisId, id, deck, slot);
+      const mesh = [];
+      armament(mesh, gun, id, 0, true);
+      return part(mesh, [2.8, gun.side, gun.height + 2]);
+    });
+    const kit = [];
+    if (kitId != null) equipment(kit, kitId, profile, deck);
+    return {
+      undercarriage: part(undercarriage, [1, 0, 4]),
+      body: part(body, [-2, 0, deck + profile.height]),
+      weapons,
+      kit: kit.length ? part(kit, [-8, 0, deck + profile.height + (kitId === 0 ? 6 : 2)]) : null,
+    };
   }
 
   function muzzle(unit, still) {
@@ -423,5 +466,5 @@ const MechArt = (() => {
     }
   }
 
-  return { draw, muzzle, preview, profile: (id) => PROFILES[id] };
+  return { draw, muzzle, preview, assemblyRig, ASSEMBLY_DIRECTION, profile: (id) => PROFILES[id] };
 })();

@@ -16,6 +16,7 @@
   const manual = $("manual");
   const refitDialog = $("refit-dialog");
   const factoryDialog = $("factory-dialog");
+  const factoryAssembly = new FactoryAssembly($("factory-assembly-scene"), $("factory-assembly-status"), $("factory-assembly-progress"));
   const workshopPanel = $("workshop");
   const workshopHome = workshopPanel.parentElement;
   const inspector = $("object-inspector");
@@ -49,6 +50,7 @@
   let speed = speeds[0];
   let lastPreview = "";
   let lastInspectedDesign = "";
+  let factoryClockRunning = false;
   let shownQueue = [];
   let factoryListKey = null;
   let pointerType = "";
@@ -77,7 +79,8 @@
   }
 
   function simulationRunning() {
-    return phase === "running" && !manual.open && !refitDialog.open && !factoryDialog.open;
+    return !manual.open && !refitDialog.open &&
+      (factoryDialog.open ? operationActive() && factoryClockRunning : phase === "running");
   }
 
   function operationActive() {
@@ -145,6 +148,8 @@
     mapOrder = null;
     toggleEventList(false);
     setText("factory-name", site.name);
+    factoryClockRunning = false;
+    factoryAssembly.reset();
     factoryDialog.showModal();
     $("factory-dock").append(workshopPanel);
     updatePanels();
@@ -366,6 +371,7 @@
 
   function showEnd() {
     phase = "ended";
+    if (factoryDialog.open) factoryDialog.close();
     inspected = null;
     const won = match.winner === FACTION.ally;
     setText("end-kicker", won ? "Сигнал принят" : "Связь потеряна");
@@ -828,6 +834,8 @@
     }
     if (factoryDialog.open && workshop) {
       setText("factory-name", workshop.name);
+      setText("factory-pause", factoryClockRunning ? "Бой идёт" : "Игра на паузе");
+      setText("factory-clock", factoryClockRunning ? "Поставить на паузу" : "Запустить время");
       for (const [i, resource] of RESOURCES.entries()) {
         setText("factory-bank-" + resource, Math.floor(bank[i]));
         setText("factory-income-" + resource, "+" + rateFormat.format(workshop.rates[i]) + "/с");
@@ -980,10 +988,16 @@
   pauseButton.addEventListener("click", togglePause);
   $("open-factory").addEventListener("click", () => openWorkshop(workshopSite()));
   $("close-factory").addEventListener("click", () => factoryDialog.close());
+  $("factory-clock").addEventListener("click", () => {
+    factoryClockRunning = !factoryClockRunning;
+    lastFrame = performance.now() / 1000;
+    updatePanels();
+  });
   factoryDialog.addEventListener("close", () => {
     if (factoryDialog.open) return;
+    factoryClockRunning = false;
     workshopHome.append(workshopPanel);
-    canvas.focus({ preventScroll: true });
+    if (operationActive()) canvas.focus({ preventScroll: true });
     updatePanels();
   });
   $("close-inspector").addEventListener("click", () => {
@@ -1262,7 +1276,8 @@
       }
     }
     if (playback) view.draw(advanceReplay(dt), noSelection, now);
-    else if (!factoryDialog.open) view.draw(match, selected, now, workshopSite());
+    else if (factoryDialog.open) factoryAssembly.update(workshopSite(), match.time);
+    else view.draw(match, selected, now, workshopSite());
     if (now - lastPanels > .14) {
       updatePanels();
       lastPanels = now;

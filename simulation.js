@@ -828,6 +828,7 @@ const EchoSim = (() => {
           return;
         }
         available = Math.max(0, available - job.remaining);
+        job.remaining = 0;
         site.queue.shift();
         const occupied = [...this.bases, ...this.entities()];
         const spots = this.serviceSpots(site);
